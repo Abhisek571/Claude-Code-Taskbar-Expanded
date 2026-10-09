@@ -790,6 +790,94 @@ fn built_in_classic_adds_a_fable_column_when_the_limit_is_available() {
 }
 
 #[test]
+fn horizontal_fable_columns_follow_claude_visibility_and_usage_direction() {
+    use crate::models::{UsageData, UsageLimit, UsageSection};
+
+    let usage = AppUsageData::from_iter([(
+        ProviderId::Claude,
+        UsageData {
+            limits: vec![UsageLimit {
+                key: "weekly_scoped_fable".into(),
+                kind: "weekly_scoped".into(),
+                model: Some("Fable".into()),
+                usage: UsageSection {
+                    available: true,
+                    percentage: 43.0,
+                    resets_at: None,
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    )]);
+    for theme in [
+        ThemeDocument::starter(),
+        serde_json::from_str(include_str!("../themes/compact-fluent-quad.json")).unwrap(),
+    ] {
+        let surface = &theme.surfaces[0];
+        let fable_index = surface
+            .children
+            .iter()
+            .position(|object| object.id == "fable-provider")
+            .unwrap();
+        let disabled = ThemeRuntime::new(false, true, false);
+        assert_eq!(
+            resolve_surface_size(&theme, 0, Some(&usage), disabled),
+            resolve_surface_size(&theme, 0, None, disabled),
+            "{} must not reserve Fable space when Claude is disabled",
+            theme.name
+        );
+        assert!(
+            resolve_object_bounds_with_runtime(&theme, 0, fable_index, Some(&usage), disabled)
+                .is_none()
+        );
+        for (countdown, percentage, text) in [(false, 43.0, "Fable 43%"), (true, 57.0, "Fable 57%")]
+        {
+            let runtime = ThemeRuntime::from_providers(ProviderSet::from_enabled(ProviderId::ALL))
+                .with_countdown(countdown);
+            let (width, height) = resolve_surface_size(&theme, 0, Some(&usage), runtime);
+            let canvas = Canvas {
+                width,
+                height,
+                ..Default::default()
+            };
+            let mut context = DataContext::from_usage_with_runtime(Some(&usage), &canvas, runtime);
+            for dark in [false, true] {
+                context.insert("system.dark", dark as u8 as f64);
+                for object in surface
+                    .children
+                    .iter()
+                    .filter(|object| object.parent.as_deref() == Some("fable-provider"))
+                    .filter(|object| evaluate(&object.render.0, &context).unwrap() != 0.0)
+                {
+                    match &object.content {
+                        SceneContent::Progress { value, .. } => {
+                            assert_eq!(evaluate(&value.0, &context).unwrap(), percentage);
+                        }
+                        SceneContent::Text { template, .. } => {
+                            assert_eq!(format_template(template, &context), text);
+                        }
+                        _ => panic!("unexpected Fable content"),
+                    }
+                }
+            }
+            for (index, object) in surface.children.iter().enumerate() {
+                if object.parent.as_deref() != Some("provider-row") {
+                    continue;
+                }
+                let (x, y, w, h) =
+                    resolve_object_bounds_with_runtime(&theme, 0, index, Some(&usage), runtime)
+                        .unwrap();
+                assert!(x >= 0.0 && x + w <= width as f64, "{}", object.id);
+                assert!(y >= 0.0 && y + h <= height as f64, "{}", object.id);
+            }
+            let rendered = render_theme_surface_with_runtime(&theme, 0, Some(&usage), runtime);
+            assert!(rendered.warnings.is_empty(), "{:?}", rendered.warnings);
+        }
+    }
+}
+
+#[test]
 fn starter_theme_round_trips_and_validates() {
     let theme = ThemeDocument::starter();
     assert!(theme.validate().is_empty());

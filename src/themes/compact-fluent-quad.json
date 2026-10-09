@@ -21,7 +21,7 @@
         "offset_x": 6,
         "offset_y": 0
       },
-      "width": "providers.count * (ceil(10 / max(1, providers.count)) * 11 - 1 + 4 + 62) + max(0, providers.count - 1) * 6 + providers.opencode.enabled * 28 + providers.cursor.enabled * 18 + claude.model.fable.available * 96",
+      "width": "providers.count * (ceil(10 / max(1, providers.count)) * 11 - 1 + 4 + 62) + max(0, providers.count - 1) * 6 + providers.opencode.enabled * 28 + providers.cursor.enabled * 18 + providers.claude.enabled * claude.model.fable.available * 96",
       "height": "46",
       "background": {
         "type": "none"
@@ -645,7 +645,7 @@
         {
           "id": "fable-provider",
           "name": "Fable weekly meter",
-          "render": "claude.model.fable.available",
+          "render": "providers.claude.enabled && claude.model.fable.available",
           "visibility": "100",
           "parent": "provider-row",
           "width": "90",
