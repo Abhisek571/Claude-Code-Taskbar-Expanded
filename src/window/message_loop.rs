@@ -710,7 +710,9 @@ pub(super) unsafe extern "system" fn wnd_proc(
                         SWP_NOACTIVATE,
                     );
                 }
-                diagnose::log("taskbar collision: auto-ejected widget to floating");
+                diagnose::log(format!(
+                    "taskbar collision: auto-ejected widget to floating taskbar={taskbar_rect:?} widget={widget_rect:?}"
+                ));
                 render_layered();
             } else if action == 0 && s.auto_ejected {
                 s.auto_ejected = false;
@@ -727,6 +729,11 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     s.is_switching_window_style = false;
                 }
                 diagnose::log("taskbar collision resolved: re-docked widget to taskbar");
+                position_at_taskbar();
+                render_layered();
+            } else if action == TASKBAR_COLLISION_REPOSITION {
+                drop(state);
+                diagnose::log("taskbar geometry changed: repositioning docked widget");
                 position_at_taskbar();
                 render_layered();
             }

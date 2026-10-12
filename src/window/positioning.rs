@@ -480,8 +480,13 @@ pub(super) fn foreground_is_fullscreen_on_display(display_index: usize) -> bool 
         {
             return false;
         }
-        rect_covers_monitor(rect, display.rect)
+        window_is_fullscreen(rect, display.rect, IsZoomed(foreground).as_bool())
     }
+}
+
+pub(super) fn window_is_fullscreen(rect: RECT, monitor: RECT, maximized: bool) -> bool {
+    // Maximized windows also cover the monitor when the taskbar auto-hides.
+    !maximized && rect_covers_monitor(rect, monitor)
 }
 
 pub(super) fn rect_covers_monitor(rect: RECT, monitor: RECT) -> bool {
@@ -1027,7 +1032,24 @@ pub(super) fn taskbar_ejection_required(
     overlaps_apps: bool,
     locked: bool,
 ) -> bool {
-    taskbar_surface_is_clipped(taskbar, widget) || (!locked && overlaps_apps)
+    if locked {
+        // Windows 10's 40px bar slightly clips the built-in 46px layouts.
+        // Honor the lock while at least half the widget remains visible, but
+        // retain the visibility fallback for mostly hidden layouts.
+        return taskbar_surface_is_clipped(taskbar, widget)
+            && calculate_rect_overlap_ratio(widget, taskbar) < 0.5;
+    }
+    taskbar_surface_is_clipped(taskbar, widget) || overlaps_apps
+}
+
+pub(super) fn taskbar_reposition_required(
+    taskbar: RECT,
+    widget: RECT,
+    target: RECT,
+    locked: bool,
+) -> bool {
+    taskbar_ejection_required(taskbar, widget, false, locked)
+        && !taskbar_ejection_required(taskbar, target, false, locked)
 }
 
 /// Choose a measured gap near the drag, including gaps left of centred apps.

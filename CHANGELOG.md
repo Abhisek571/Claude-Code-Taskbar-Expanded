@@ -4,6 +4,14 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.19.2] - 2026-10-13
+
+### Fixed
+
+- Keep locked widgets docked on Windows 10 when the built-in layout slightly overhangs the taskbar. Skip collision decisions during auto-hide slides and reveal strips, reposition stale dock offsets before falling back to floating, and restore locked widgets when at least half their layout fits again. Mostly hidden layouts retain the visibility fallback. Include taskbar and widget bounds in ejection diagnostics. ([#165](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/165))
+- Keep floating widgets visible over maximized windows with an auto-hide taskbar, while continuing to hide them over fullscreen windows.
+- Add regression coverage for Windows 10 taskbar geometry at fractional DPI, both horizontal built-in themes and provider counts, hidden taskbars on all four edges, and stale-position recovery.
+
 ## [2.19.1] - 2026-10-11
 
 ### Changed
@@ -1335,3 +1343,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.18.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.18.0...v2.18.1
 [2.19.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.18.1...v2.19.0
 [2.19.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.0...v2.19.1
+[2.19.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.1...v2.19.2
