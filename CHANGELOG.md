@@ -4,6 +4,13 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.19.4] - 2026-10-13
+
+### Fixed
+
+- Cache the theme list in Settings and Theme Studio instead of reading and validating theme files and reinstalling built-in themes on every frame, reducing dashboard scrolling stutter. Refresh after saves, imports, and deletions, and check file metadata once per second for external changes, including in-place edits. ([#167](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/167))
+- Add regression coverage for cache reuse, external changes, immediate invalidation, theme ordering, invalid files, library creation and removal, and active themes outside the managed library.
+
 ## [2.19.3] - 2026-10-13
 
 ### Fixed
@@ -1352,3 +1359,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.0...v2.19.1
 [2.19.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.1...v2.19.2
 [2.19.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.2...v2.19.3
+[2.19.4]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.3...v2.19.4

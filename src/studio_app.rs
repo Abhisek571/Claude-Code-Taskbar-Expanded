@@ -578,6 +578,7 @@ struct StudioApp {
     startup_enabled: bool,
     theme: ThemeDocument,
     theme_path: Option<PathBuf>,
+    available_themes: AvailableThemesCache,
     selection: Selection,
     preview: Option<egui::TextureHandle>,
     preview_dirty: bool,

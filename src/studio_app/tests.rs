@@ -442,6 +442,7 @@ fn app_with_surfaces(surfaces: Vec<SceneObject>) -> StudioApp {
         startup_enabled: false,
         theme,
         theme_path: None,
+        available_themes: AvailableThemesCache::new(theme_engine::themes_directory()),
         selection: Selection::Surface(0),
         preview: None,
         preview_dirty: true,
@@ -486,6 +487,28 @@ fn app_with_surfaces(surfaces: Vec<SceneObject>) -> StudioApp {
         context_menu_selection: None,
         delete_context_menu_confirmation: None,
     }
+}
+
+#[test]
+fn available_themes_keeps_current_external_theme_fresh_without_stale_fallbacks() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = app_with_surfaces(vec![root("root")]);
+    app.available_themes = AvailableThemesCache::new(directory.path().join("library"));
+    let first_path = directory.path().join("first.json");
+    app.theme_path = Some(first_path.clone());
+    app.theme.name = "First".into();
+    let themes = app.available_themes();
+    assert_eq!(themes.len(), 1);
+    assert_eq!(themes[0].path, first_path);
+    app.theme.name = "Renamed".into();
+    assert_eq!(app.available_themes()[0].name, "Renamed");
+    let second_path = directory.path().join("second.json");
+    app.theme_path = Some(second_path.clone());
+    let themes = app.available_themes();
+    assert_eq!(themes.len(), 1);
+    assert_eq!(themes[0].path, second_path);
+    app.theme_path = None;
+    assert!(app.available_themes().is_empty());
 }
 
 #[test]
