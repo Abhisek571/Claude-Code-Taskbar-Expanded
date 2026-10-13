@@ -4,6 +4,13 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.19.3] - 2026-10-13
+
+### Fixed
+
+- Resolve saved taskbar and floating placements by the monitor's GDI device name before its enumeration index, keeping the selected display when monitor order or the primary display changes. Preserve the saved choice while a named display is absent, and retain index-based behavior for older settings. ([#166](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/166))
+- Add regression coverage for monitor reordering, missing displays, settings compatibility, and device-based placement for both taskbar and floating hosts.
+
 ## [2.19.2] - 2026-10-13
 
 ### Fixed
@@ -1344,3 +1351,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.18.1...v2.19.0
 [2.19.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.0...v2.19.1
 [2.19.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.1...v2.19.2
+[2.19.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.2...v2.19.3

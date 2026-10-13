@@ -69,6 +69,48 @@ fn placement(nest: &str) -> PlacementOverride {
 }
 
 #[test]
+fn saved_monitor_device_overrides_an_invalid_index_for_both_hosts() {
+    let displays = native_interop::find_monitors();
+    for (index, display) in displays.iter().enumerate() {
+        let device = native_interop::monitor_device_name(display.handle)
+            .expect("enumerated monitor must have a device name");
+        for nest in ["taskbar", "floating"] {
+            let mut saved = placement(nest);
+            saved.monitor_index = usize::MAX;
+            saved.monitor_device = Some(device.clone());
+            saved.screen_x = display.rect.left;
+            saved.screen_y = display.rect.top;
+            let state = state_for(ThemeDocument::starter(), saved.clone());
+            let theme = theme_with_placement(&state, false).unwrap();
+            assert_eq!(theme.surfaces[0].placement.reference.display, index);
+            assert_eq!(state.placement_override, Some(saved));
+        }
+    }
+}
+
+#[test]
+fn absent_saved_monitor_preserves_the_choice_while_using_host_fallbacks() {
+    for nest in ["taskbar", "floating"] {
+        let mut saved = placement(nest);
+        saved.monitor_index = usize::MAX;
+        saved.monitor_device = Some("missing-monitor".into());
+        saved.screen_x = 400;
+        saved.screen_y = 300;
+        let state = state_for(ThemeDocument::starter(), saved.clone());
+        let fallback = theme_with_placement(&state, false).unwrap();
+        let mut legacy = saved.clone();
+        legacy.monitor_device = None;
+        let legacy_state = state_for(ThemeDocument::starter(), legacy);
+        let expected = theme_with_placement(&legacy_state, false).unwrap();
+        assert_eq!(
+            fallback.surfaces[0].placement,
+            expected.surfaces[0].placement
+        );
+        assert_eq!(state.placement_override, Some(saved));
+    }
+}
+
+#[test]
 fn theme_selection_releases_the_previous_roots_temporary_fallback() {
     for nest in [
         SurfaceNest::Desktop,

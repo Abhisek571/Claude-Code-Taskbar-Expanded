@@ -820,6 +820,7 @@ fn test_placement_override_serialization_and_normalization() {
     let json = serde_json::to_string(&ov).unwrap();
     assert!(json.contains("\"nest\":\"floating\""));
     assert!(json.contains("\"screen_x\":250"));
+    assert!(!json.contains("monitor_device"));
 
     let deserialized: app_settings::PlacementOverride = serde_json::from_str(&json).unwrap();
     assert_eq!(ov, deserialized);
@@ -834,6 +835,27 @@ fn test_placement_override_serialization_and_normalization() {
     settings.floating_card_opacity = Some(150);
     settings.normalize();
     assert_eq!(settings.floating_card_opacity, Some(100));
+}
+
+#[test]
+fn saved_monitor_device_survives_settings_round_trip_and_normalization() {
+    for nest in ["taskbar", "floating"] {
+        let saved: app_settings::PlacementOverride = serde_json::from_str(&format!(
+            r#"{{"nest":"{nest}","monitor_index":1,"monitor_device":"\\\\.\\DISPLAY2","screen_x":250,"screen_y":120}}"#
+        ))
+        .unwrap();
+        assert_eq!(saved.monitor_device.as_deref(), Some(r"\\.\DISPLAY2"));
+        let mut settings = app_settings::SettingsFile::default();
+        settings.placement_override = Some(saved.clone());
+        let json = serde_json::to_string(&settings).unwrap();
+        let mut restored: app_settings::SettingsFile = serde_json::from_str(&json).unwrap();
+        restored.normalize();
+        assert_eq!(restored.placement_override, Some(saved));
+    }
+    let legacy: app_settings::PlacementOverride =
+        serde_json::from_str(r#"{"nest":"floating","monitor_index":1}"#).unwrap();
+    assert!(legacy.monitor_device.is_none());
+    assert_eq!(legacy.monitor_index, 1);
 }
 
 #[test]
