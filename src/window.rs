@@ -233,6 +233,8 @@ fn open_web_url(hwnd: HWND, url: &str, failure_message: &'static str) {
 /// recreates the taskbar and wipes our tray-icon registration).
 const TASKBAR_WATCH_INTERVAL_SECS: u64 = 2;
 
+const TASKBAR_COLLISION_REPOSITION: usize = 2;
+
 static SUPPRESS_TRAY_REPOSITION_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Current system DPI (96 = 100% scaling, 144 = 150%, 192 = 200%, etc.)
@@ -539,9 +541,17 @@ fn taskbar_collision_action(state: &AppState) -> Option<usize> {
     }
     let taskbar = state.taskbar_hwnd?.to_hwnd();
     let bounds = native_interop::get_taskbar_rect(taskbar)?;
+    // Do not interpret an auto-hide slide or reveal strip as a capacity change.
+    if !unsafe { IsWindowVisible(taskbar).as_bool() } || !taskbar_collision::taskbar_shown(bounds) {
+        return None;
+    }
     if state.auto_ejected {
-        let occupancy = taskbar_collision::cached(taskbar, bounds)?;
         let target = restored_dock_rect(state, taskbar, bounds)?;
+        if taskbar_lock_applies(state) {
+            return (!positioning::taskbar_ejection_required(bounds, target, false, true))
+                .then_some(0);
+        }
+        let occupancy = taskbar_collision::cached(taskbar, bounds)?;
         let margin = if state.auto_ejected_for_capacity {
             0
         } else {
@@ -556,6 +566,15 @@ fn taskbar_collision_action(state: &AppState) -> Option<usize> {
     {
         let widget = native_interop::get_window_rect_safe(state.hwnd.to_hwnd())?;
         let locked = taskbar_lock_applies(state);
+        // A layout pass during a slide can leave a stale child offset. Restore
+        // the configured position before deciding the layout cannot fit.
+        if positioning::taskbar_ejection_required(bounds, widget, false, locked)
+            && restored_dock_rect(state, taskbar, bounds).is_some_and(|target| {
+                positioning::taskbar_reposition_required(bounds, widget, target, locked)
+            })
+        {
+            return Some(TASKBAR_COLLISION_REPOSITION);
+        }
         // Visibility fallback needs only native geometry; an unavailable or
         // stale accessibility sample must not leave the widget clipped.
         let overlaps_apps = if positioning::taskbar_surface_is_clipped(bounds, widget) || locked {
@@ -2964,7 +2983,7 @@ fn redock_locked_widget(hwnd: HWND) {
             return;
         };
         // Locking suppresses collisions with app buttons, but must not restore
-        // an incompatible layout into a parent that would clip the widget.
+        // a mostly hidden layout into the parent. Use the same rule as ejection.
         if let Some(taskbar) = state.taskbar_hwnd.map(SendHwnd::to_hwnd) {
             let Some(bounds) = native_interop::get_taskbar_rect(taskbar) else {
                 return;
@@ -2972,7 +2991,9 @@ fn redock_locked_widget(hwnd: HWND) {
             let Some(target) = restored_dock_rect(state, taskbar, bounds) else {
                 return;
             };
-            if positioning::taskbar_surface_is_clipped(bounds, target) {
+            if !taskbar_collision::taskbar_shown(bounds)
+                || positioning::taskbar_ejection_required(bounds, target, false, true)
+            {
                 return;
             }
         }

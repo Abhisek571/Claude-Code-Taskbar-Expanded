@@ -166,6 +166,244 @@ fn taskbar_fallback_preserves_lock_and_auto_hide_behavior() {
 }
 
 #[test]
+fn locked_windows_10_widgets_tolerate_overhang_but_not_mostly_hidden_layouts() {
+    // Reported 125% geometry: a 40px taskbar and a 46px Classic widget.
+    let bar = RECT {
+        left: 0,
+        top: 1390,
+        right: 2560,
+        bottom: 1440,
+    };
+    let widget = RECT {
+        left: 1952,
+        top: 1382,
+        right: 2223,
+        bottom: 1440,
+    };
+    for overlaps in [false, true] {
+        assert!(!positioning::taskbar_ejection_required(
+            bar, widget, overlaps, true
+        ));
+        assert!(positioning::taskbar_ejection_required(
+            bar, widget, overlaps, false
+        ));
+    }
+    for (top, visible) in [(1361, 29), (1360, 28), (1332, 0)] {
+        let shifted = RECT {
+            top,
+            bottom: top + 58,
+            ..widget
+        };
+        assert_eq!(
+            positioning::taskbar_ejection_required(bar, shifted, false, true),
+            visible < 29,
+        );
+    }
+    // The same policy applies to a vertical bar, using visible area rather
+    // than just height, and does not keep a wide horizontal theme docked there.
+    let vertical = RECT {
+        left: 0,
+        top: 0,
+        right: 50,
+        bottom: 1440,
+    };
+    let narrow = RECT {
+        left: 0,
+        top: 300,
+        right: 58,
+        bottom: 571,
+    };
+    assert!(!positioning::taskbar_ejection_required(
+        vertical, narrow, false, true
+    ));
+    assert!(positioning::taskbar_ejection_required(
+        vertical,
+        RECT {
+            right: 271,
+            ..narrow
+        },
+        false,
+        true,
+    ));
+}
+
+#[test]
+fn horizontal_builtins_stay_locked_on_windows_10_across_dpi_and_provider_counts() {
+    for source in [
+        include_str!("../themes/classic-usage-widget.json"),
+        include_str!("../themes/compact-fluent-quad.json"),
+    ] {
+        let mut theme: ThemeDocument = serde_json::from_str(source).unwrap();
+        theme.prepare_runtime();
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let px = |n| scaled_theme_dimension(n, scale);
+            let monitor = RECT {
+                left: 0,
+                top: 0,
+                right: px(2048),
+                bottom: px(1152),
+            };
+            let bar = RECT {
+                top: monitor.bottom - px(40),
+                ..monitor
+            };
+            let tray = RECT {
+                left: bar.right - px(270),
+                ..bar
+            };
+            for providers in [
+                ProviderSet::from_enabled([ProviderId::Claude]),
+                ProviderSet::from_enabled(ProviderId::ALL),
+            ] {
+                let runtime =
+                    ThemeRuntime::from_providers(providers).with_host_dimensions(2048, 40);
+                let frame = positioning::widget_frame(&theme, None, runtime, scale);
+                let rect = positioning::surface_screen_rect(
+                    &theme.surfaces[0].placement,
+                    frame.width,
+                    frame.height,
+                    scale,
+                    monitor,
+                    Some(bar),
+                    Some(tray),
+                );
+                assert!(positioning::taskbar_ejection_required(
+                    bar, rect, false, false
+                ));
+                assert!(!positioning::taskbar_ejection_required(
+                    bar, rect, true, true
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+fn stale_dock_offsets_reposition_only_when_the_restored_layout_is_visible() {
+    let bar = RECT {
+        left: 0,
+        top: 1390,
+        right: 2560,
+        bottom: 1440,
+    };
+    let target = RECT {
+        left: 1952,
+        top: 1382,
+        right: 2223,
+        bottom: 1440,
+    };
+    let stale = RECT {
+        top: 1340,
+        bottom: 1398,
+        ..target
+    };
+    assert!(positioning::taskbar_reposition_required(
+        bar, stale, target, true
+    ));
+    assert!(!positioning::taskbar_reposition_required(
+        bar, stale, target, false
+    ));
+    assert!(!positioning::taskbar_reposition_required(
+        bar, target, target, true
+    ));
+    assert!(!positioning::taskbar_reposition_required(
+        bar, stale, stale, true
+    ));
+    let fitting = RECT {
+        top: 1390,
+        ..target
+    };
+    assert!(positioning::taskbar_reposition_required(
+        bar, stale, fitting, false
+    ));
+}
+
+#[test]
+fn auto_hide_slides_and_reveal_strips_are_not_fully_shown() {
+    let monitor = RECT {
+        left: -2560,
+        top: -1440,
+        right: 0,
+        bottom: 0,
+    };
+    let portrait = RECT {
+        left: -3640,
+        top: -500,
+        right: -2560,
+        bottom: 1420,
+    };
+    let monitors = [monitor, portrait];
+    let bars = [
+        RECT {
+            top: -50,
+            ..monitor
+        },
+        RECT {
+            bottom: -1390,
+            ..monitor
+        },
+        RECT {
+            right: -3590,
+            ..portrait
+        },
+        RECT {
+            left: -50,
+            ..monitor
+        },
+    ];
+    for (edge, bar) in bars.into_iter().enumerate() {
+        assert!(taskbar_collision::taskbar_fully_shown(bar, &monitors));
+        for distance in [1, 25, 48, 50] {
+            let sliding = match edge {
+                0 => RECT {
+                    top: bar.top + distance,
+                    bottom: bar.bottom + distance,
+                    ..bar
+                },
+                1 => RECT {
+                    top: bar.top - distance,
+                    bottom: bar.bottom - distance,
+                    ..bar
+                },
+                2 => RECT {
+                    left: bar.left - distance,
+                    right: bar.right - distance,
+                    ..bar
+                },
+                _ => RECT {
+                    left: bar.left + distance,
+                    right: bar.right + distance,
+                    ..bar
+                },
+            };
+            assert!(
+                !taskbar_collision::taskbar_fully_shown(sliding, &monitors),
+                "edge={edge} distance={distance}"
+            );
+        }
+        let strip = match edge {
+            0 => RECT {
+                top: bar.bottom - 2,
+                ..bar
+            },
+            1 => RECT {
+                bottom: bar.top + 2,
+                ..bar
+            },
+            2 => RECT {
+                right: bar.left + 2,
+                ..bar
+            },
+            _ => RECT {
+                left: bar.right - 2,
+                ..bar
+            },
+        };
+        assert!(!taskbar_collision::taskbar_fully_shown(strip, &monitors));
+    }
+}
+
+#[test]
 fn classic_vertical_fits_above_the_tray_on_either_vertical_edge() {
     let theme: ThemeDocument =
         serde_json::from_str(include_str!("../themes/classic-vertical.json")).unwrap();
@@ -355,6 +593,10 @@ fn fullscreen_bounds_cover_the_monitor_but_maximized_work_area_does_not() {
         bottom: 1080,
     };
     assert!(rect_covers_monitor(monitor, monitor));
+    assert!(positioning::window_is_fullscreen(monitor, monitor, false));
+    // Auto-hide removes the work-area gap, but maximization must still leave
+    // floating widgets visible. Borderless fullscreen keeps hiding them.
+    assert!(!positioning::window_is_fullscreen(monitor, monitor, true));
     assert!(rect_covers_monitor(
         RECT {
             left: -2,
