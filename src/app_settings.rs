@@ -89,6 +89,10 @@ pub struct PlacementOverride {
     pub nest: String,
     #[serde(default)]
     pub monitor_index: usize,
+    /// GDI device name (e.g. `\\.\DISPLAY2`) of the saved monitor. Enumeration
+    /// order can change between boots, so this wins over `monitor_index`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor_device: Option<String>,
     #[serde(default)]
     pub screen_x: i32,
     #[serde(default)]

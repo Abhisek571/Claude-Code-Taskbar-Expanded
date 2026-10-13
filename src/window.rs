@@ -644,7 +644,7 @@ fn theme_with_placement(state: &AppState, auto_ejected: bool) -> Option<ThemeDoc
             .filter(|p| p.nest == "floating")
             .map(|p| {
                 (
-                    Some(p.monitor_index),
+                    Some((p.monitor_index, p.monitor_device.clone())),
                     POINT {
                         x: p.screen_x,
                         y: p.screen_y,
@@ -655,6 +655,9 @@ fn theme_with_placement(state: &AppState, auto_ejected: bool) -> Option<ThemeDoc
     if let Some((saved_monitor, point)) = floating {
         let displays = native_interop::find_monitors();
         let selected = saved_monitor
+            .and_then(|(index, device)| {
+                positioning::resolve_saved_monitor(&displays, index, device.as_deref())
+            })
             .and_then(|index| displays.get(index).copied().map(|d| (index, d)))
             .unwrap_or_else(|| positioning::monitor_for_point(&displays, point));
         apply_floating_position(&mut theme, state, selected.0, selected.1, point);
@@ -664,11 +667,12 @@ fn theme_with_placement(state: &AppState, auto_ejected: bool) -> Option<ThemeDoc
         .filter(|p| p.nest == "taskbar")
     {
         let displays = native_interop::find_monitors();
-        let index = if p.monitor_index < displays.len() {
-            p.monitor_index
-        } else {
-            0
-        };
+        let index = positioning::resolve_saved_monitor(
+            &displays,
+            p.monitor_index,
+            p.monitor_device.as_deref(),
+        )
+        .unwrap_or(0);
         let horizontal = taskbar_is_horizontal(index);
         let placement = if p.screen_x > 0 || p.screen_y > 0 {
             let offset = if horizontal { p.screen_x } else { p.screen_y };

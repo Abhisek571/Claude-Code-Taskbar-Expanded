@@ -569,6 +569,7 @@ fn test_placement_override_serialization_and_normalization() {
     let ov = app_settings::PlacementOverride {
         nest: "floating".into(),
         monitor_index: 1,
+        monitor_device: None,
         screen_x: 250,
         screen_y: 120,
         tray_offset: 0,

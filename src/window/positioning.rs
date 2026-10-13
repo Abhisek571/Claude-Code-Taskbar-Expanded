@@ -733,6 +733,34 @@ pub(super) fn monitor_index_for_handle(
     displays.iter().position(|display| display.handle == handle)
 }
 
+/// Resolve a saved monitor: the device name wins, then the saved index. A
+/// named monitor that is absent (e.g. not enumerated yet during boot) yields
+/// None so callers fall back without the index silently picking another one.
+pub(super) fn resolve_saved_monitor(
+    displays: &[native_interop::DisplayMonitor],
+    index: usize,
+    device: Option<&str>,
+) -> Option<usize> {
+    let names: Vec<Option<String>> = displays
+        .iter()
+        .map(|display| native_interop::monitor_device_name(display.handle))
+        .collect();
+    resolve_saved_monitor_in(&names, index, device)
+}
+
+fn resolve_saved_monitor_in(
+    names: &[Option<String>],
+    index: usize,
+    device: Option<&str>,
+) -> Option<usize> {
+    match device {
+        Some(device) => names
+            .iter()
+            .position(|name| name.as_deref() == Some(device)),
+        None => (index < names.len()).then_some(index),
+    }
+}
+
 pub(super) fn override_primary_placement(
     theme: &mut ThemeDocument,
     placement: theme_engine::Placement,
@@ -1063,4 +1091,39 @@ pub(super) fn taskbar_free_dock_slot(
             calculate_rect_overlap_ratio(widget, *a)
                 .total_cmp(&calculate_rect_overlap_ratio(widget, *b))
         })
+}
+
+#[cfg(test)]
+mod resolve_saved_monitor_tests {
+    use super::resolve_saved_monitor_in;
+
+    fn names(list: &[&str]) -> Vec<Option<String>> {
+        list.iter().map(|name| Some((*name).to_string())).collect()
+    }
+
+    #[test]
+    fn device_name_follows_the_monitor_when_enumeration_order_changes() {
+        // Saved on DISPLAY2 at index 1; a third monitor now sorts before it.
+        let displays = names(&[r"\\.\DISPLAY1", r"\\.\DISPLAY3", r"\\.\DISPLAY2"]);
+        assert_eq!(
+            resolve_saved_monitor_in(&displays, 1, Some(r"\\.\DISPLAY2")),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn absent_named_monitor_does_not_fall_back_to_the_stale_index() {
+        let displays = names(&[r"\\.\DISPLAY1", r"\\.\DISPLAY3"]);
+        assert_eq!(
+            resolve_saved_monitor_in(&displays, 1, Some(r"\\.\DISPLAY2")),
+            None
+        );
+    }
+
+    #[test]
+    fn placements_saved_without_a_device_keep_using_the_index() {
+        let displays = names(&[r"\\.\DISPLAY1", r"\\.\DISPLAY2"]);
+        assert_eq!(resolve_saved_monitor_in(&displays, 1, None), Some(1));
+        assert_eq!(resolve_saved_monitor_in(&displays, 5, None), None);
+    }
 }

@@ -60,6 +60,7 @@ fn placement(nest: &str) -> PlacementOverride {
     PlacementOverride {
         nest: nest.into(),
         monitor_index: 0,
+        monitor_device: None,
         screen_x: 0,
         screen_y: 0,
         tray_offset: 0,

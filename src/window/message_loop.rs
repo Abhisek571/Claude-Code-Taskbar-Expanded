@@ -512,6 +512,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                             s.placement_override = Some(PlacementOverride {
                                 nest: "taskbar".into(),
                                 monitor_index,
+                                monitor_device: native_interop::monitor_device_name(handle),
                                 screen_x,
                                 screen_y,
                                 tray_offset,
@@ -590,6 +591,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                             s.placement_override = Some(PlacementOverride {
                                 nest: "floating".into(),
                                 monitor_index: monitor_idx,
+                                monitor_device: native_interop::monitor_device_name(display.handle),
                                 screen_x: clamped_x,
                                 screen_y: clamped_y,
                                 tray_offset: 0,

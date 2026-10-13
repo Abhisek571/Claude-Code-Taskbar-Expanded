@@ -4,7 +4,7 @@ use windows::core::BOOL;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Shell::ShellExecuteW;
@@ -126,6 +126,22 @@ pub fn find_monitors() -> Vec<DisplayMonitor> {
     }
     result.sort_by_key(|display| (!display.primary, display.rect.left, display.rect.top));
     result
+}
+
+/// GDI device name of a monitor (e.g. `\\.\DISPLAY2`), stable across boots
+/// unlike its position in `find_monitors`.
+pub fn monitor_device_name(monitor: HMONITOR) -> Option<String> {
+    let mut info = MONITORINFOEXW::default();
+    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    if !unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo).as_bool() } {
+        return None;
+    }
+    let len = info
+        .szDevice
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(info.szDevice.len());
+    (len > 0).then(|| String::from_utf16_lossy(&info.szDevice[..len]))
 }
 
 pub fn find_taskbars() -> Vec<TaskbarWindow> {
