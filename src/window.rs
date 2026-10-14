@@ -248,6 +248,9 @@ const UI_HANG_RECOVERY_SECS: u64 = 30;
 /// and relaunch on wake after a single missed probe on either side of it.
 const UI_HANG_MIN_SILENT_PROBES: u32 = 10;
 
+/// A long scheduling gap (for example, system sleep) breaks a run of probes.
+const UI_HANG_MAX_PROBE_GAP_SECS: u64 = 10;
+
 /// How long a single liveness probe waits for the UI thread to answer.
 const UI_PROBE_TIMEOUT_MS: u32 = 1_000;
 
@@ -465,14 +468,16 @@ fn relaunch_self_for(cause: RelaunchCause) {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
     if last != 0 && now.saturating_sub(last) < RELAUNCH_THROTTLE_SECS {
-        diagnose::log("relaunch storm detected; backing off before relaunching");
+        diagnose::log_recovery("relaunch storm detected; backing off before relaunching");
         std::thread::sleep(Duration::from_secs(RELAUNCH_BACKOFF_SECS));
     }
 
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(error) => {
-            diagnose::log_error("watchdog: unable to resolve current executable", error);
+            diagnose::log_recovery(format!(
+                "watchdog: unable to resolve current executable: {error}"
+            ));
             RELAUNCH_IN_PROGRESS.store(false, Ordering::Release);
             return;
         }
@@ -502,7 +507,7 @@ fn relaunch_self_for(cause: RelaunchCause) {
     }
     match command.spawn() {
         Ok(_) => {
-            diagnose::log("watchdog: relaunched fresh instance, exiting old one");
+            diagnose::log_recovery("watchdog: relaunched fresh instance, exiting old one");
             if matches!(cause, RelaunchCause::UiHang { .. }) {
                 // ExitProcess runs DLL detach code after terminating the other
                 // threads, and deadlocks if one of them held a lock that code
@@ -517,7 +522,9 @@ fn relaunch_self_for(cause: RelaunchCause) {
             std::process::exit(0);
         }
         Err(error) => {
-            diagnose::log_error("watchdog: unable to spawn relaunched instance", error);
+            diagnose::log_recovery(format!(
+                "watchdog: unable to spawn relaunched instance: {error}"
+            ));
             RELAUNCH_IN_PROGRESS.store(false, Ordering::Release);
         }
     }
@@ -578,24 +585,24 @@ fn spawn_ui_hang_watchdog() {
                 silence = None;
                 continue;
             }
-            let current = silence.get_or_insert_with(|| UiSilence {
-                since: Instant::now(),
-                silent_probes: 0,
-                streak: hang_relaunch_streak(
-                    std::env::var(ENV_HANG_RELAUNCHES).ok().as_deref(),
-                    std::env::var(ENV_LAST_RELAUNCH_UNIX).ok().as_deref(),
-                    now_unix_secs(),
-                ),
+            let now = Instant::now();
+            let current = silence.get_or_insert_with(|| {
+                UiSilence::new(
+                    now,
+                    hang_relaunch_streak(
+                        std::env::var(ENV_HANG_RELAUNCHES).ok().as_deref(),
+                        std::env::var(ENV_LAST_RELAUNCH_UNIX).ok().as_deref(),
+                        now_unix_secs(),
+                    ),
+                )
             });
-            current.silent_probes = current.silent_probes.saturating_add(1);
+            current.record_probe(now);
             let delay = hang_recovery_delay(current.streak);
             // Elapsed time rather than a cycle count alone: a probe that times
             // out makes its own cycle longer than the sleep interval.
-            if current.silent_probes >= UI_HANG_MIN_SILENT_PROBES
-                && current.since.elapsed() >= delay
-            {
+            if current.recovery_due(now) {
                 let streak = current.streak;
-                diagnose::log(format!(
+                diagnose::log_recovery(format!(
                     "watchdog: UI thread stopped answering for {}s -> relaunching",
                     delay.as_secs()
                 ));
@@ -609,8 +616,34 @@ fn spawn_ui_hang_watchdog() {
 /// An unbroken run of unanswered probes, with the streak it is measured against.
 struct UiSilence {
     since: Instant,
+    last_probe: Instant,
     silent_probes: u32,
     streak: u32,
+}
+
+impl UiSilence {
+    fn new(now: Instant, streak: u32) -> Self {
+        Self {
+            since: now,
+            last_probe: now,
+            silent_probes: 0,
+            streak,
+        }
+    }
+
+    fn record_probe(&mut self, now: Instant) {
+        if now.duration_since(self.last_probe) >= Duration::from_secs(UI_HANG_MAX_PROBE_GAP_SECS) {
+            self.since = now;
+            self.silent_probes = 0;
+        }
+        self.last_probe = now;
+        self.silent_probes = self.silent_probes.saturating_add(1);
+    }
+
+    fn recovery_due(&self, now: Instant) -> bool {
+        self.silent_probes >= UI_HANG_MIN_SILENT_PROBES
+            && now.duration_since(self.since) >= hang_recovery_delay(self.streak)
+    }
 }
 
 /// Back-to-back hang relaunches leading up to this process, read from the
@@ -3265,6 +3298,46 @@ mod ui_hang_watchdog_tests {
     use super::*;
     use std::sync::mpsc;
     use windows::Win32::System::Threading::GetCurrentThreadId;
+
+    #[test]
+    fn recovery_requires_both_the_delay_and_consecutive_probes() {
+        let start = Instant::now();
+        let mut silence = UiSilence::new(start, 0);
+        for seconds in 0..10 {
+            let now = start + Duration::from_secs(seconds * 2);
+            silence.record_probe(now);
+            assert!(!silence.recovery_due(now));
+        }
+        for seconds in 10..=15 {
+            let now = start + Duration::from_secs(seconds * 2);
+            silence.record_probe(now);
+        }
+        assert!(silence.recovery_due(start + Duration::from_secs(30)));
+
+        let mut sparse = UiSilence::new(start, 0);
+        for seconds in [0, 9, 18, 27, 36] {
+            let now = start + Duration::from_secs(seconds);
+            sparse.record_probe(now);
+            assert!(!sparse.recovery_due(now));
+        }
+    }
+
+    #[test]
+    fn sleep_breaks_silence_even_after_many_failed_probes() {
+        let start = Instant::now();
+        let mut silence = UiSilence::new(start, 0);
+        for probe in 0..UI_HANG_MIN_SILENT_PROBES {
+            silence.record_probe(start + Duration::from_secs(u64::from(probe) * 2));
+        }
+        let wake = start + Duration::from_secs(600);
+        silence.record_probe(wake);
+        assert_eq!(silence.silent_probes, 1);
+        assert!(!silence.recovery_due(wake));
+        for probe in 1..=15 {
+            silence.record_probe(wake + Duration::from_secs(probe * 2));
+        }
+        assert!(silence.recovery_due(wake + Duration::from_secs(30)));
+    }
 
     struct WindowThread {
         hwnd: SendHwnd,
