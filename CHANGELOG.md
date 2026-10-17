@@ -4,6 +4,16 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.19.6] - 2026-10-17
+
+### Changed
+
+- Update `lucide-icons` from 1.52.0 to 1.56.0 for the dashboard and Theme Studio icons and bundled icon font. ([#169](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/169))
+
+### Fixed
+
+- Update `zip` from 8.6.0 to 9.0.4 to resolve extraction advisories RUSTSEC-2026-0367, RUSTSEC-2026-0368, and RUSTSEC-2026-0369 found by the release dependency checks. Adapt theme package filename handling to the updated API and cover compressed export/import compatibility.
+
 ## [2.19.5] - 2026-10-14
 
 ### Fixed
@@ -1369,3 +1379,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.2...v2.19.3
 [2.19.4]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.3...v2.19.4
 [2.19.5]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.4...v2.19.5
+[2.19.6]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.5...v2.19.6
