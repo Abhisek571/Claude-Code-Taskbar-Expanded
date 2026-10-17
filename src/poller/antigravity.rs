@@ -14,10 +14,13 @@ use crate::models::{limit_slug, UsageData, UsageLimit, UsageSection};
 const ANTIGRAVITY_CREDENTIAL_TARGET: &str = "gemini:antigravity";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const EXPIRY_SKEW: Duration = Duration::from_secs(60);
+// The production endpoint goes first: daily-cloudcode-pa answers
+// retrieveUserQuotaSummary with the Claude and GPT group only, so stopping
+// there hides the Gemini group.
 const ANTIGRAVITY_ENDPOINTS: &[&str] = &[
+    "https://cloudcode-pa.googleapis.com",
     "https://daily-cloudcode-pa.googleapis.com",
     "https://daily-cloudcode-pa.sandbox.googleapis.com",
-    "https://cloudcode-pa.googleapis.com",
 ];
 
 #[derive(Deserialize)]
@@ -675,6 +678,14 @@ mod auth_tests {
             refresh_token: Some("refresh".into()),
             expiry: expiry.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn production_endpoint_is_tried_before_daily() {
+        assert_eq!(
+            ANTIGRAVITY_ENDPOINTS.first(),
+            Some(&"https://cloudcode-pa.googleapis.com")
+        );
     }
 
     #[test]
