@@ -4,6 +4,12 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.19.7] - 2026-10-17
+
+### Changed
+
+- Update `serde_json` from 1.0.151 to 1.0.154 for JSON parsing and serialization at build time and runtime. ([#170](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/170))
+
 ## [2.19.6] - 2026-10-17
 
 ### Changed
@@ -1380,3 +1386,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.4]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.3...v2.19.4
 [2.19.5]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.4...v2.19.5
 [2.19.6]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.5...v2.19.6
+[2.19.7]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.6...v2.19.7
