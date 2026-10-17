@@ -14,12 +14,17 @@ use crate::models::{limit_slug, UsageData, UsageLimit, UsageSection};
 const ANTIGRAVITY_CREDENTIAL_TARGET: &str = "gemini:antigravity";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const EXPIRY_SKEW: Duration = Duration::from_secs(60);
+// The server returns the "Gemini 4 Argon" group only for this UA form, and
+// only from the daily endpoint; old CLI versions are rejected.
+const ANTIGRAVITY_USER_AGENT: &str = "antigravity/cli/1.4.0";
 // The production endpoint goes first: daily-cloudcode-pa answers
 // retrieveUserQuotaSummary with the Claude and GPT group only, so stopping
 // there hides the Gemini group.
+const ANTIGRAVITY_PRODUCTION_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com";
+const ANTIGRAVITY_DAILY_ENDPOINT: &str = "https://daily-cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_ENDPOINTS: &[&str] = &[
-    "https://cloudcode-pa.googleapis.com",
-    "https://daily-cloudcode-pa.googleapis.com",
+    ANTIGRAVITY_PRODUCTION_ENDPOINT,
+    ANTIGRAVITY_DAILY_ENDPOINT,
     "https://daily-cloudcode-pa.sandbox.googleapis.com",
 ];
 
@@ -322,7 +327,20 @@ pub(super) fn fetch_antigravity_usage(token: &str) -> Result<UsageData, PollErro
 
     for base_url in ANTIGRAVITY_ENDPOINTS {
         match fetch_antigravity_usage_from_endpoint(base_url, token) {
-            Ok(data) => return Ok(data),
+            Ok(mut data) => {
+                if *base_url == ANTIGRAVITY_PRODUCTION_ENDPOINT {
+                    // Production never returns the Argon group, and its other
+                    // groups are the ones that match the official display.
+                    match fetch_antigravity_usage_from_endpoint(ANTIGRAVITY_DAILY_ENDPOINT, token)
+                    {
+                        Ok(daily) => merge_antigravity_limits(&mut data.limits, daily.limits),
+                        Err(error) => diagnose::log(format!(
+                            "Antigravity daily endpoint failed, skipping its extra groups: {error:?}"
+                        )),
+                    }
+                }
+                return Ok(data);
+            }
             Err(PollError::AuthRequired) => auth_error = true,
             Err(error) => last_error = error,
         }
@@ -379,7 +397,7 @@ pub(super) fn fetch_antigravity_project(
         .post(&format!("{base_url}/v1internal:loadCodeAssist"))
         .header("Authorization", &format!("Bearer {token}"))
         .header("Content-Type", "application/json")
-        .header("User-Agent", "antigravity")
+        .header("User-Agent", ANTIGRAVITY_USER_AGENT)
         .send_json(&body)
         .and_then(super::check_http_status)
     {
@@ -422,7 +440,7 @@ pub(super) fn fetch_antigravity_model_quota(
         .post(&format!("{base_url}/v1internal:fetchAvailableModels"))
         .header("Authorization", &format!("Bearer {token}"))
         .header("Content-Type", "application/json")
-        .header("User-Agent", "antigravity")
+        .header("User-Agent", ANTIGRAVITY_USER_AGENT)
         .send_json(&body)
         .and_then(super::check_http_status)
     {
@@ -472,7 +490,7 @@ pub(super) fn fetch_antigravity_quota_summary(
         .post(&format!("{base_url}/v1internal:retrieveUserQuotaSummary"))
         .header("Authorization", &format!("Bearer {token}"))
         .header("Content-Type", "application/json")
-        .header("User-Agent", "antigravity")
+        .header("User-Agent", ANTIGRAVITY_USER_AGENT)
         .send_json(&body)
         .and_then(super::check_http_status)
     {
@@ -585,6 +603,16 @@ pub(super) fn antigravity_limits_from_summary_groups(
     limits
 }
 
+// Adds the groups only `extra` has; a group both sides know keeps `base`'s buckets.
+pub(super) fn merge_antigravity_limits(base: &mut Vec<UsageLimit>, extra: Vec<UsageLimit>) {
+    let known: Vec<Option<String>> = base.iter().map(|limit| limit.model.clone()).collect();
+    base.extend(
+        extra
+            .into_iter()
+            .filter(|limit| !known.contains(&limit.model)),
+    );
+}
+
 pub(super) fn antigravity_usage_from_summary_group(
     group: AntigravityQuotaSummaryGroup,
 ) -> Option<UsageData> {
@@ -685,6 +713,15 @@ mod auth_tests {
         assert_eq!(
             ANTIGRAVITY_ENDPOINTS.first(),
             Some(&"https://cloudcode-pa.googleapis.com")
+        );
+    }
+
+    #[test]
+    fn user_agent_uses_the_cli_form_that_unlocks_argon() {
+        assert!(ANTIGRAVITY_USER_AGENT.starts_with("antigravity/cli/"));
+        assert_eq!(
+            ANTIGRAVITY_ENDPOINTS.get(1),
+            Some(&ANTIGRAVITY_DAILY_ENDPOINT)
         );
     }
 

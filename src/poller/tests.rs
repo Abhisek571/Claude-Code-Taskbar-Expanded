@@ -455,6 +455,72 @@ fn antigravity_summary_exposes_every_group_as_limits() {
     }
 }
 
+fn antigravity_limits_from_json(json: &str) -> Vec<crate::models::UsageLimit> {
+    let response: antigravity::AntigravityQuotaSummaryResponse =
+        serde_json::from_str(json).expect("summary response should deserialize");
+    antigravity::antigravity_usage_from_summary(response)
+        .expect("summary should have quota")
+        .limits
+}
+
+const ANTIGRAVITY_PRODUCTION_SUMMARY: &str = r#"{"groups": [
+    {"displayName": "Gemini Models", "buckets": [
+        {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 1},
+        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.975}]},
+    {"displayName": "Claude and GPT models", "buckets": [
+        {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0.5}]}
+]}"#;
+
+const ANTIGRAVITY_DAILY_SUMMARY: &str = r#"{"groups": [
+    {"displayName": "Gemini Models", "buckets": [
+        {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 1},
+        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 1}]},
+    {"displayName": "Claude and GPT models", "buckets": [
+        {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0.1}]},
+    {"displayName": "Gemini 4 Argon", "buckets": [
+        {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly", "remainingFraction": 0.816}]}
+]}"#;
+
+#[test]
+fn antigravity_merge_prefers_production_and_adds_daily_only_groups() {
+    let mut limits = antigravity_limits_from_json(ANTIGRAVITY_PRODUCTION_SUMMARY);
+    antigravity::merge_antigravity_limits(
+        &mut limits,
+        antigravity_limits_from_json(ANTIGRAVITY_DAILY_SUMMARY),
+    );
+
+    let percentage = |key: &str| {
+        limits
+            .iter()
+            .find(|limit| limit.key == key)
+            .unwrap_or_else(|| panic!("missing {key}"))
+            .usage
+            .percentage
+    };
+    assert_eq!(limits.len(), 4);
+    assert!((percentage("gemini_models_weekly") - 2.5).abs() < 0.000001);
+    assert!((percentage("claude_and_gpt_models_weekly") - 50.0).abs() < 0.000001);
+    assert!((percentage("gemini_4_argon_weekly") - 18.4).abs() < 0.000001);
+}
+
+#[test]
+fn antigravity_merge_with_failed_endpoint_keeps_the_other_side() {
+    let production = antigravity_limits_from_json(ANTIGRAVITY_PRODUCTION_SUMMARY);
+
+    let mut only_production = production.clone();
+    antigravity::merge_antigravity_limits(&mut only_production, Vec::new());
+    assert_eq!(only_production.len(), production.len());
+
+    let mut only_daily = Vec::new();
+    antigravity::merge_antigravity_limits(
+        &mut only_daily,
+        antigravity_limits_from_json(ANTIGRAVITY_DAILY_SUMMARY),
+    );
+    assert!(only_daily
+        .iter()
+        .any(|limit| limit.key == "gemini_4_argon_weekly"));
+}
+
 #[test]
 fn one_provider_failing_does_not_blank_its_row() {
     let previous: AppUsageData = [
