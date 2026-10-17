@@ -4,6 +4,14 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.19.5] - 2026-10-14
+
+### Fixed
+
+- Relaunch the widget when its UI thread stops answering for at least 30 seconds and ten consecutive probes, even while it holds application state. Back off repeated hang recoveries up to eight minutes, skip probes while a debugger is attached, and prevent concurrent watchdogs from spawning duplicate replacements. ([#168](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/168))
+- Preserve diagnostic recording and append existing logs across watchdog relaunches. Let recovery proceed when a frozen thread holds the diagnostic log mutex, and reset the hang deadline after long probe gaps such as system sleep.
+- Add regression coverage for responsive, frozen, and destroyed windows, recovery timing, sleep gaps, repeated-hang backoff, and log mutex contention.
+
 ## [2.19.4] - 2026-10-13
 
 ### Fixed
@@ -1360,3 +1368,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.1...v2.19.2
 [2.19.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.2...v2.19.3
 [2.19.4]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.3...v2.19.4
+[2.19.5]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.4...v2.19.5
