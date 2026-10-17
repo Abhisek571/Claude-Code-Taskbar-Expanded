@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use super::{build_agent, parse_iso8601, windows_credentials, PollError};
 use crate::diagnose;
-use crate::models::{UsageData, UsageSection};
+use crate::models::{limit_slug, UsageData, UsageLimit, UsageSection};
 
 const ANTIGRAVITY_CREDENTIAL_TARGET: &str = "gemini:antigravity";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
@@ -520,14 +520,18 @@ pub(super) fn antigravity_section_from_summary_bucket(
 pub(super) fn antigravity_usage_from_summary(
     response: AntigravityQuotaSummaryResponse,
 ) -> Option<UsageData> {
+    let groups = response.groups.unwrap_or_default();
+    let limits = antigravity_limits_from_summary_groups(&groups);
+    let mut primary = None;
     let mut fallback = None;
 
-    for group in response.groups.unwrap_or_default() {
+    for group in groups {
         let is_gemini = is_antigravity_gemini_summary_group(&group);
         let usage = antigravity_usage_from_summary_group(group);
 
         if is_gemini && usage.is_some() {
-            return usage;
+            primary = usage;
+            break;
         }
 
         if fallback.is_none() {
@@ -535,7 +539,47 @@ pub(super) fn antigravity_usage_from_summary(
         }
     }
 
-    fallback
+    let mut usage = primary.or(fallback)?;
+    usage.limits = limits;
+    Some(usage)
+}
+
+// The primary 5h/weekly pair shows only one group; themes need every group
+// (e.g. "Claude and GPT", "Gemini 4 Argon") to show per-group quota.
+pub(super) fn antigravity_limits_from_summary_groups(
+    groups: &[AntigravityQuotaSummaryGroup],
+) -> Vec<UsageLimit> {
+    let mut limits = Vec::new();
+    for group in groups {
+        let Some(name) = group
+            .display_name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+        else {
+            continue;
+        };
+        for bucket in group.buckets.iter().flatten() {
+            let kind = match bucket.window.as_deref() {
+                Some(window) if window.eq_ignore_ascii_case("5h") => "session",
+                Some(window) if window.eq_ignore_ascii_case("weekly") => "weekly",
+                _ => continue,
+            };
+            let Some(usage) = antigravity_section_from_summary_bucket(bucket) else {
+                continue;
+            };
+            limits.push(UsageLimit {
+                key: format!("{}_{kind}", limit_slug(name)),
+                kind: kind.to_string(),
+                label: name.to_string(),
+                model: Some(name.to_string()),
+                model_id: bucket.bucket_id.clone(),
+                scope: None,
+                is_active: false,
+                usage,
+            });
+        }
+    }
+    limits
 }
 
 pub(super) fn antigravity_usage_from_summary_group(

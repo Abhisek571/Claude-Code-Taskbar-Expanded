@@ -406,6 +406,56 @@ fn antigravity_summary_prefers_gemini_group() {
 }
 
 #[test]
+fn antigravity_summary_exposes_every_group_as_limits() {
+    let response: antigravity::AntigravityQuotaSummaryResponse = serde_json::from_str(
+        r#"{
+                "groups": [
+                    {
+                        "displayName": "Gemini Models",
+                        "buckets": [
+                            {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.75},
+                            {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.5}
+                        ]
+                    },
+                    {
+                        "displayName": "Claude and GPT",
+                        "buckets": [
+                            {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1},
+                            {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0}
+                        ]
+                    },
+                    {
+                        "displayName": "Gemini 4 Argon",
+                        "buckets": [
+                            {"bucketId": "argon-weekly", "window": "weekly", "remainingFraction": 0.9},
+                            {"bucketId": "argon-daily", "window": "daily", "remainingFraction": 0.1}
+                        ]
+                    }
+                ]
+            }"#,
+    )
+    .expect("summary response should deserialize");
+
+    let usage = antigravity::antigravity_usage_from_summary(response)
+        .expect("Gemini quota should be selected");
+
+    assert_eq!(usage.session.percentage, 25.0);
+    assert_eq!(usage.weekly.percentage, 50.0);
+    let expected = [
+        ("gemini_models_session", 25.0),
+        ("gemini_models_weekly", 50.0),
+        ("claude_and_gpt_session", 0.0),
+        ("claude_and_gpt_weekly", 100.0),
+        ("gemini_4_argon_weekly", 10.0),
+    ];
+    assert_eq!(usage.limits.len(), expected.len());
+    for (limit, (key, percentage)) in usage.limits.iter().zip(expected) {
+        assert_eq!(limit.key, key);
+        assert!((limit.usage.percentage - percentage).abs() < 0.000001);
+    }
+}
+
+#[test]
 fn one_provider_failing_does_not_blank_its_row() {
     let previous: AppUsageData = [
         (ProviderId::Claude, usage_with_session_percent(21.0)),
