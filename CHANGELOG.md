@@ -4,6 +4,12 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.19.8] - 2026-10-17
+
+### Changed
+
+- Update `winresource` from 0.1.31 to 0.1.34 for embedding the executable's Windows icon, manifest, and version metadata. ([#171](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/171))
+
 ## [2.19.7] - 2026-10-17
 
 ### Changed
@@ -1387,3 +1393,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.5]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.4...v2.19.5
 [2.19.6]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.5...v2.19.6
 [2.19.7]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.6...v2.19.7
+[2.19.8]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.7...v2.19.8
