@@ -4,6 +4,13 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.19.9] - 2026-10-18
+
+### Fixed
+
+- Reconnect an open Settings or Theme Studio dashboard after the monitor recovers from a UI hang, preserving unsaved edits and undo history. Validate the replacement monitor's window class and process ID, and resolve command targets when sending settings, refresh, diagnostics, and update requests.
+- Add regression coverage for reconnection, preserved editor state, commands sent before the next dashboard refresh, stale monitor records, and standalone editors.
+
 ## [2.19.8] - 2026-10-17
 
 ### Changed
@@ -1394,3 +1401,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.6]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.5...v2.19.6
 [2.19.7]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.6...v2.19.7
 [2.19.8]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.7...v2.19.8
+[2.19.9]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.8...v2.19.9
