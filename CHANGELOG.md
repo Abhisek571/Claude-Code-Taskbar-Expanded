@@ -4,6 +4,14 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.19.10] - 2026-10-19
+
+### Fixed
+
+- Read Antigravity's Gemini quota from the first authoritative quota summary, keeping Claude/GPT pools separate and preserving missing windows as no limit data. Use only Gemini model quotas when no endpoint provides a summary, send a versioned User-Agent, and try the sandbox endpoint last. ([#177](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/177))
+- Keep empty named pools from falling back to an unrelated unnamed group's quota. Add regression coverage for pool selection, endpoint fallback, empty summaries, and unchanged reported reset times.
+- Cache absent usage windows with a null percentage so external readers can distinguish unavailable data from zero usage, while continuing to read older caches.
+
 ## [2.19.9] - 2026-10-18
 
 ### Fixed
@@ -1402,3 +1410,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.7]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.6...v2.19.7
 [2.19.8]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.7...v2.19.8
 [2.19.9]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.8...v2.19.9
+[2.19.10]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.9...v2.19.10

@@ -535,14 +535,17 @@ fn antigravity_gemini_weekly_reset_projection_tests() {
     });
     let bucket: antigravity::AntigravityQuotaSummaryBucket =
         serde_json::from_value(bucket_json).unwrap();
-    let section = antigravity::antigravity_section_from_summary_bucket(&bucket)
-        .expect("section exists");
+    let section =
+        antigravity::antigravity_section_from_summary_bucket(&bucket).expect("section exists");
     assert!((section.percentage - 20.0).abs() < 0.001);
     let reported_reset = section.resets_at.expect("reset exists");
     let diff = reported_reset
         .duration_since(reset_16h)
         .unwrap_or_else(|e| e.duration());
-    assert!(diff < Duration::from_secs(2), "close weekly reset must not be projected");
+    assert!(
+        diff < Duration::from_secs(2),
+        "close weekly reset must not be projected"
+    );
 
     // 2. gemini-weekly with reset in the past (-1 hour)
     let reset_past = now - Duration::from_secs(3600);
@@ -555,13 +558,16 @@ fn antigravity_gemini_weekly_reset_projection_tests() {
     });
     let bucket_past: antigravity::AntigravityQuotaSummaryBucket =
         serde_json::from_value(bucket_past_json).unwrap();
-    let section_past = antigravity::antigravity_section_from_summary_bucket(&bucket_past)
-        .expect("section exists");
+    let section_past =
+        antigravity::antigravity_section_from_summary_bucket(&bucket_past).expect("section exists");
     let past_reset = section_past.resets_at.expect("reset exists");
     let diff_past = past_reset
         .duration_since(reset_past)
         .unwrap_or_else(|e| e.duration());
-    assert!(diff_past < Duration::from_secs(2), "Past reset must not have +6d added");
+    assert!(
+        diff_past < Duration::from_secs(2),
+        "Past reset must not have +6d added"
+    );
 
     // 3. 3p-weekly with reset in 16 hours (MUST NOT have +6d added)
     let bucket_3p_json = serde_json::json!({
@@ -572,13 +578,16 @@ fn antigravity_gemini_weekly_reset_projection_tests() {
     });
     let bucket_3p: antigravity::AntigravityQuotaSummaryBucket =
         serde_json::from_value(bucket_3p_json).unwrap();
-    let section_3p = antigravity::antigravity_section_from_summary_bucket(&bucket_3p)
-        .expect("section exists");
+    let section_3p =
+        antigravity::antigravity_section_from_summary_bucket(&bucket_3p).expect("section exists");
     let reset_3p = section_3p.resets_at.expect("reset exists");
     let diff_3p = reset_3p
         .duration_since(reset_16h)
         .unwrap_or_else(|e| e.duration());
-    assert!(diff_3p < Duration::from_secs(2), "3p-weekly must not have +6d added");
+    assert!(
+        diff_3p < Duration::from_secs(2),
+        "3p-weekly must not have +6d added"
+    );
 }
 
 #[test]
@@ -608,7 +617,6 @@ fn antigravity_models_quota_extracts_gemini_and_external_correctly() {
     let resp: antigravity::AntigravityModelsResponse = serde_json::from_str(models_json).unwrap();
     let gemini = antigravity::best_gemini_model_quota(&resp).expect("gemini quota exists");
     assert!((gemini.percentage - 34.0).abs() < 0.001);
-
 }
 
 #[test]
@@ -633,13 +641,30 @@ fn antigravity_first_summary_wins_and_model_quotas_are_only_a_last_resort() {
         asked.borrow_mut().push(url.to_string());
         match url {
             "a" => Err(PollError::RequestFailed),
-            "b" => Ok((UsageData::default(), Summary)),
+            "b" => Ok((
+                UsageData {
+                    weekly: with_session(40.0).session,
+                    ..Default::default()
+                },
+                Summary,
+            )),
             _ => Ok((with_session(80.0), Models)),
         }
     })
     .unwrap();
     assert!(!data.session.available);
+    assert!(data.weekly.available);
+    assert_eq!(data.weekly.percentage, 40.0);
     assert_eq!(*asked.borrow(), ["a", "b"]);
+
+    // An authoritative empty summary overrides an earlier model fallback.
+    let data = antigravity::select_antigravity_usage(&endpoints, |url| match url {
+        "a" => Ok((with_session(30.0), Models)),
+        "b" => Ok((UsageData::default(), Summary)),
+        _ => panic!("later endpoints must not be asked after a summary"),
+    })
+    .unwrap();
+    assert!(!data.session.available && !data.weekly.available);
 
     // Without any summary the model quota is used.
     let data = antigravity::select_antigravity_usage(&endpoints, |url| match url {
@@ -662,7 +687,10 @@ fn antigravity_model_fallback_reports_only_gemini_models() {
     )
     .unwrap();
     let usage = antigravity::antigravity_usage_from_models(&models).expect("usage");
-    assert!((usage.session.percentage - 10.0).abs() < 0.001, "Gemini pool must ignore Claude/GPT/image models");
+    assert!(
+        (usage.session.percentage - 10.0).abs() < 0.001,
+        "Gemini pool must ignore Claude/GPT/image models"
+    );
 }
 
 #[test]
@@ -676,19 +704,63 @@ fn antigravity_summary_does_not_guess_pools_by_position() {
     )
     .unwrap();
     let usage = antigravity::antigravity_usage_from_summary(response).expect("usage");
-    assert!(!usage.session.available && !usage.weekly.available, "Gemini pool must stay empty");
+    assert!(
+        !usage.session.available && !usage.weekly.available,
+        "Gemini pool must stay empty"
+    );
 }
 
 #[test]
 fn antigravity_summary_without_windows_is_an_answer_not_a_failure() {
-    let response: antigravity::AntigravityQuotaSummaryResponse = serde_json::from_str(
-        r#"{"groups":[{"displayName":"Gemini models","buckets":[]}]}"#,
-    )
-    .unwrap();
+    let response: antigravity::AntigravityQuotaSummaryResponse =
+        serde_json::from_str(r#"{"groups":[{"displayName":"Gemini models","buckets":[]}]}"#)
+            .unwrap();
     let usage = antigravity::antigravity_usage_from_summary(response).expect("authoritative");
     assert!(!usage.session.available && !usage.weekly.available);
 
     let empty: antigravity::AntigravityQuotaSummaryResponse =
         serde_json::from_str(r#"{"groups":[]}"#).unwrap();
     assert!(antigravity::antigravity_usage_from_summary(empty).is_some());
+}
+
+#[test]
+fn antigravity_empty_named_pool_blocks_unnamed_quota_fallback() {
+    for name in ["Gemini models", "Claude and GPT models"] {
+        for buckets in [
+            serde_json::json!([]),
+            serde_json::json!([
+                {"window":"weekly"}
+            ]),
+        ] {
+            let response = serde_json::from_value(serde_json::json!({
+                "groups": [
+                    {"displayName": name, "buckets": buckets},
+                    {"buckets": [{"window":"5h", "remainingFraction":0.2}]}
+                ]
+            }))
+            .unwrap();
+            let usage = antigravity::antigravity_usage_from_summary(response).unwrap();
+            assert!(
+                !usage.session.available && !usage.weekly.available,
+                "an empty named pool ({name}) must not use an unnamed pool's quota"
+            );
+        }
+    }
+}
+
+#[test]
+fn antigravity_unnamed_quota_fallback_requires_a_single_pool() {
+    for count in [1, 2] {
+        let response = serde_json::from_value(serde_json::json!({
+            "groups": vec![serde_json::json!({
+                "buckets": [{"window":"5h", "remainingFraction":0.2}]
+            }); count]
+        }))
+        .unwrap();
+        let usage = antigravity::antigravity_usage_from_summary(response).unwrap();
+        assert_eq!(usage.session.available, count == 1);
+        if count == 1 {
+            assert!((usage.session.percentage - 80.0).abs() < 0.001);
+        }
+    }
 }

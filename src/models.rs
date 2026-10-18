@@ -485,7 +485,10 @@ mod tests {
     fn absent_window_is_cached_without_a_percentage() {
         let section = UsageSection::default();
         let json = serde_json::to_value(&section).unwrap();
-        assert!(json["percentage"].is_null(), "readers must not see 0% for an absent window");
+        assert!(
+            json["percentage"].is_null(),
+            "readers must not see 0% for an absent window"
+        );
         let decoded: UsageSection = serde_json::from_value(json).unwrap();
         assert_eq!(decoded, section);
     }
