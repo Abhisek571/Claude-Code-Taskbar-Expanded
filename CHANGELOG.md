@@ -4,6 +4,51 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.19.10] - 2026-10-19
+
+### Fixed
+
+- Read Antigravity's Gemini quota from the first authoritative quota summary, keeping Claude/GPT pools separate and preserving missing windows as no limit data. Use only Gemini model quotas when no endpoint provides a summary, send a versioned User-Agent, and try the sandbox endpoint last. ([#177](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/177))
+- Keep empty named pools from falling back to an unrelated unnamed group's quota. Add regression coverage for pool selection, endpoint fallback, empty summaries, and unchanged reported reset times.
+- Cache absent usage windows with a null percentage so external readers can distinguish unavailable data from zero usage, while continuing to read older caches.
+
+## [2.19.9] - 2026-10-18
+
+### Fixed
+
+- Reconnect an open Settings or Theme Studio dashboard after the monitor recovers from a UI hang, preserving unsaved edits and undo history. Validate the replacement monitor's window class and process ID, and resolve command targets when sending settings, refresh, diagnostics, and update requests.
+- Add regression coverage for reconnection, preserved editor state, commands sent before the next dashboard refresh, stale monitor records, and standalone editors.
+
+## [2.19.8] - 2026-10-17
+
+### Changed
+
+- Update `winresource` from 0.1.31 to 0.1.34 for embedding the executable's Windows icon, manifest, and version metadata. ([#171](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/171))
+
+## [2.19.7] - 2026-10-17
+
+### Changed
+
+- Update `serde_json` from 1.0.151 to 1.0.154 for JSON parsing and serialization at build time and runtime. ([#170](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/170))
+
+## [2.19.6] - 2026-10-17
+
+### Changed
+
+- Update `lucide-icons` from 1.52.0 to 1.56.0 for the dashboard and Theme Studio icons and bundled icon font. ([#169](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/169))
+
+### Fixed
+
+- Update `zip` from 8.6.0 to 9.0.4 to resolve extraction advisories RUSTSEC-2026-0367, RUSTSEC-2026-0368, and RUSTSEC-2026-0369 found by the release dependency checks. Adapt theme package filename handling to the updated API and cover compressed export/import compatibility.
+
+## [2.19.5] - 2026-10-14
+
+### Fixed
+
+- Relaunch the widget when its UI thread stops answering for at least 30 seconds and ten consecutive probes, even while it holds application state. Back off repeated hang recoveries up to eight minutes, skip probes while a debugger is attached, and prevent concurrent watchdogs from spawning duplicate replacements. ([#168](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/168))
+- Preserve diagnostic recording and append existing logs across watchdog relaunches. Let recovery proceed when a frozen thread holds the diagnostic log mutex, and reset the hang deadline after long probe gaps such as system sleep.
+- Add regression coverage for responsive, frozen, and destroyed windows, recovery timing, sleep gaps, repeated-hang backoff, and log mutex contention.
+
 ## [2.19.4] - 2026-10-13
 
 ### Fixed
@@ -1360,3 +1405,9 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.1...v2.19.2
 [2.19.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.2...v2.19.3
 [2.19.4]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.3...v2.19.4
+[2.19.5]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.4...v2.19.5
+[2.19.6]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.5...v2.19.6
+[2.19.7]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.6...v2.19.7
+[2.19.8]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.7...v2.19.8
+[2.19.9]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.8...v2.19.9
+[2.19.10]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.9...v2.19.10

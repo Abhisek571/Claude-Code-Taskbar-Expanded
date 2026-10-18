@@ -11,8 +11,8 @@ use windows::Win32::System::Threading::{
     INFINITE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, MessageBoxW, PostMessageW, SetForegroundWindow, ShowWindowAsync, MB_ICONERROR,
-    MB_OK, SW_RESTORE, WM_CLOSE,
+    FindWindowW, GetClassNameW, GetWindowThreadProcessId, IsWindow, MessageBoxW, PostMessageW,
+    SetForegroundWindow, ShowWindowAsync, MB_ICONERROR, MB_OK, SW_RESTORE, WM_CLOSE,
 };
 
 const DASHBOARD_TITLE: &str = "Usage Monitor";
@@ -58,25 +58,50 @@ pub(crate) fn publish_update_status(owner: HWND, status: UpdateStatus) {
     }
 }
 
-pub(crate) fn read_update_status(owner: isize) -> UpdateStatus {
-    let read = || -> Option<UpdateStatus> {
-        if owner == 0 {
+fn monitor_process_id(owner: isize) -> Option<u32> {
+    if owner == 0 {
+        return None;
+    }
+    let hwnd = HWND(owner as *mut _);
+    let mut class_name = [0u16; 64];
+    let mut process_id = 0;
+    unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
             return None;
         }
-        let content = std::fs::read(update_status_path()).ok()?;
-        let snapshot: UpdateSnapshot = serde_json::from_slice(&content).ok()?;
-        let mut process_id = 0;
-        unsafe {
-            windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
-                HWND(owner as *mut _),
-                Some(&mut process_id),
-            );
+        let length = GetClassNameW(hwnd, &mut class_name).max(0) as usize;
+        if String::from_utf16_lossy(&class_name[..length]) != "ClaudeCodeUsageMonitor" {
+            return None;
         }
-        // Ignore snapshots from a previous monitor or a disconnected dashboard.
-        (snapshot.owner == owner && process_id != 0 && snapshot.process_id == process_id)
-            .then_some(snapshot.status)
-    };
-    read().unwrap_or_default()
+        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+    }
+    (process_id != 0).then_some(process_id)
+}
+
+fn read_live_update_snapshot() -> Option<UpdateSnapshot> {
+    let content = std::fs::read(update_status_path()).ok()?;
+    let snapshot: UpdateSnapshot = serde_json::from_slice(&content).ok()?;
+    // A saved HWND may have been destroyed or reused by a different process.
+    (monitor_process_id(snapshot.owner) == Some(snapshot.process_id)).then_some(snapshot)
+}
+
+/// Keep a live connection, or discover the monitor that replaced a dead owner.
+/// Owner zero denotes a standalone editor and must remain disconnected.
+pub(crate) fn resolve_monitor_owner(owner: isize) -> Option<isize> {
+    if owner == 0 {
+        return None;
+    }
+    if monitor_process_id(owner).is_some() {
+        return Some(owner);
+    }
+    read_live_update_snapshot().map(|snapshot| snapshot.owner)
+}
+
+pub(crate) fn read_update_status(owner: isize) -> UpdateStatus {
+    read_live_update_snapshot()
+        .filter(|snapshot| snapshot.owner == owner)
+        .map(|snapshot| snapshot.status)
+        .unwrap_or_default()
 }
 
 fn language() -> crate::localization::LanguageId {
