@@ -396,7 +396,9 @@ pub(super) fn fetch_antigravity_usage_from_endpoint(
 }
 
 /// Fallback when the quota summary is unavailable: Gemini models only.
-pub(super) fn antigravity_usage_from_models(models: &AntigravityModelsResponse) -> Option<UsageData> {
+pub(super) fn antigravity_usage_from_models(
+    models: &AntigravityModelsResponse,
+) -> Option<UsageData> {
     let gemini = best_gemini_model_quota(models);
     // Claude/GPT model quotas do not say whether they are the 5h or the weekly
     // window, so the external pool is left as "no limit data" here rather

@@ -688,7 +688,10 @@ fn antigravity_model_fallback_reports_only_gemini_models() {
     )
     .unwrap();
     let usage = antigravity::antigravity_usage_from_models(&models).expect("usage");
-    assert!((usage.session.percentage - 10.0).abs() < 0.001, "Gemini pool must ignore Claude/GPT/image models");
+    assert!(
+        (usage.session.percentage - 10.0).abs() < 0.001,
+        "Gemini pool must ignore Claude/GPT/image models"
+    );
     // Model quotas do not name their window, so the external pool is not guessed.
     assert!(usage.external_pool.is_none());
 }
@@ -704,7 +707,10 @@ fn antigravity_summary_does_not_guess_pools_by_position() {
     )
     .unwrap();
     let usage = antigravity::antigravity_usage_from_summary(response).expect("usage");
-    assert!(!usage.session.available && !usage.weekly.available, "Gemini pool must stay empty");
+    assert!(
+        !usage.session.available && !usage.weekly.available,
+        "Gemini pool must stay empty"
+    );
     let external = usage.external_pool.expect("external pool");
     assert!((external.weekly.percentage - 60.0).abs() < 0.001);
 }
@@ -752,7 +758,10 @@ fn antigravity_extracts_both_gemini_and_external_groups_from_summary() {
     assert!(data.weekly.available);
     assert!((data.weekly.percentage - 30.0).abs() < 1e-4);
 
-    let ext = data.external_pool.as_deref().expect("external pool extracted");
+    let ext = data
+        .external_pool
+        .as_deref()
+        .expect("external pool extracted");
     assert!(ext.session.available);
     assert!((ext.session.percentage - 60.0).abs() < 1e-4);
     assert!(ext.weekly.available);
@@ -799,4 +808,33 @@ fn antigravity_unnamed_quota_fallback_requires_a_single_pool() {
             assert!((usage.session.percentage - 80.0).abs() < 0.001);
         }
     }
+}
+
+#[test]
+fn failed_antigravity_poll_preserves_and_marks_both_pools_stale() {
+    let mut gemini = usage_with_session_percent(20.0);
+    let mut external = usage_with_session_percent(70.0);
+    external.session.resets_at = Some(UNIX_EPOCH);
+    gemini.external_pool = Some(Box::new(external));
+    let previous = AppUsageData::from_iter([(ProviderId::Antigravity, gemini)]);
+    assert!(
+        app_is_past_reset(&previous),
+        "external resets must be polled too"
+    );
+    let carried = carry_forward_failures(
+        AppUsageData::default(),
+        &previous,
+        ProviderSet::from_enabled([ProviderId::Antigravity]),
+    );
+    let cached: AppUsageData =
+        serde_json::from_value(serde_json::to_value(carried).unwrap()).unwrap();
+    let gemini = cached.get(ProviderId::Antigravity).unwrap();
+    let external = cached.antigravity_external().unwrap();
+    assert!(gemini.stale && external.stale);
+    assert_eq!(gemini.session.percentage, 20.0);
+    assert_eq!(external.session.percentage, 70.0);
+    assert!(
+        !app_is_past_reset(&cached),
+        "stale external resets must not cause a poll loop"
+    );
 }

@@ -32,11 +32,11 @@ use crate::diagnose;
 use crate::localization::{self, LanguageId, Strings};
 use crate::models::AppUsageData;
 use crate::native_interop::{
-    self, TIMER_CLOCK, TIMER_COUNTDOWN, TIMER_CROSSFADE_ANIM, TIMER_CROSSFADE_SCHEDULE,
-    TIMER_MOUSE_CLICK, TIMER_POLL, TIMER_RESET_POLL, TIMER_TRAY_HOVER, TIMER_TRAY_REPOSITION,
-    TIMER_UPDATE_CHECK, TIMER_WINDOW_STATE, WM_APP_DISABLE_DIAGNOSTICS,
-    WM_APP_ENABLE_DIAGNOSTICS, WM_APP_OPEN_DASHBOARD, WM_APP_QUIT, WM_APP_REFRESH_NOW,
-    WM_APP_SETTINGS_UPDATED, WM_APP_TASKBAR_COLLISION, WM_APP_TRAY, WM_APP_USAGE_UPDATED,
+    self, TIMER_CLOCK, TIMER_COUNTDOWN, TIMER_CROSSFADE_SCHEDULE, TIMER_MOUSE_CLICK, TIMER_POLL,
+    TIMER_RESET_POLL, TIMER_TRAY_HOVER, TIMER_TRAY_REPOSITION, TIMER_UPDATE_CHECK,
+    TIMER_WINDOW_STATE, WM_APP_DISABLE_DIAGNOSTICS, WM_APP_ENABLE_DIAGNOSTICS,
+    WM_APP_OPEN_DASHBOARD, WM_APP_QUIT, WM_APP_REFRESH_NOW, WM_APP_SETTINGS_UPDATED,
+    WM_APP_TASKBAR_COLLISION, WM_APP_TRAY, WM_APP_USAGE_UPDATED,
 };
 use crate::poller;
 use crate::providers::{ProviderId, ProviderSet};
@@ -100,8 +100,6 @@ struct AppState {
     pub(super) show_antigravity_gemini: bool,
     pub(super) show_antigravity_external: bool,
     crossfade_opacity: f64,
-    crossfade_anim_start: Option<Instant>,
-    crossfade_target_opacity: f64,
     accounts: crate::accounts::AccountSettings,
 
     data: Option<AppUsageData>,
@@ -2515,8 +2513,6 @@ pub fn run() {
                 show_antigravity_gemini: settings.antigravity_gemini_enabled(),
                 show_antigravity_external: settings.antigravity_external_enabled(),
                 crossfade_opacity: 1.0,
-                crossfade_anim_start: None,
-                crossfade_target_opacity: 1.0,
                 accounts: settings.accounts.clone(),
                 data: None,
                 poll_interval_ms: settings.poll_interval_ms,
@@ -2583,7 +2579,6 @@ pub fn run() {
         diagnose::log("window shown");
 
         // Initial render using the presenter selected by the surface nest.
-        render_layered();
         schedule_countdown_timer();
         schedule_clock_timer();
         let startup_dual_mode = {
@@ -2597,6 +2592,7 @@ pub fn run() {
         if startup_dual_mode {
             arm_crossfade_schedule(hwnd);
         }
+        render_layered();
 
         if open_dashboard_on_start {
             crate::dashboard::show(hwnd);
@@ -3241,25 +3237,43 @@ fn check_language_change() {
     }
 }
 
+/// All widget surfaces use the same wall-clock phase, including after a
+/// settings change or a delayed timer following sleep.
+fn antigravity_crossfade_frame(now_ms: u64) -> (f64, u32) {
+    let phase = now_ms % 20_000;
+    let smooth = |elapsed: u64| {
+        let t = elapsed as f64 / 2_000.0;
+        t * t * (3.0 - 2.0 * t)
+    };
+    match phase {
+        0..8_000 => (1.0, (8_000 - phase) as u32),
+        8_000..10_000 => (1.0 - smooth(phase - 8_000), 30),
+        10_000..18_000 => (0.0, (18_000 - phase) as u32),
+        _ => (smooth(phase - 18_000), 30),
+    }
+}
+
 pub(super) fn arm_crossfade_schedule(hwnd: HWND) {
-    let now_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(d) => d.as_millis() as u64,
-        Err(_) => 0,
-    };
-    let cycle_pos_ms = now_ms % 20_000;
-    // Cycle: [0..8000) Gemini hold, [8000..10000) Fade to External,
-    // [10000..18000) External hold, [18000..20000) Fade to Gemini
-    let delay_ms = if cycle_pos_ms < 8_000 {
-        8_000 - cycle_pos_ms
-    } else if cycle_pos_ms < 10_000 {
-        1
-    } else if cycle_pos_ms < 18_000 {
-        18_000 - cycle_pos_ms
-    } else {
-        1
-    };
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let (opacity, delay_ms) = antigravity_crossfade_frame(now_ms);
+    let mut state = lock_state();
+    let dual_mode = state.as_ref().is_some_and(|state| {
+        state.show_antigravity_gemini
+            && state.show_antigravity_external
+            && state.providers.contains(ProviderId::Antigravity)
+    });
+    if let Some(state) = state.as_mut() {
+        state.crossfade_opacity = if dual_mode { opacity } else { 1.0 };
+    }
     unsafe {
-        let _ = SetTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE, delay_ms as u32, None);
+        if dual_mode {
+            let _ = SetTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE, delay_ms, None);
+        } else {
+            let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
+        }
     }
 }
 
@@ -3297,11 +3311,8 @@ fn reload_external_settings(hwnd: HWND) {
         if !dual_mode {
             unsafe {
                 let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
-                let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_ANIM);
             }
             state.crossfade_opacity = 1.0;
-            state.crossfade_anim_start = None;
-            state.crossfade_target_opacity = 1.0;
         }
         update_configured_placement(
             state,
@@ -3828,5 +3839,30 @@ mod credential_watch_worker_tests {
         });
         assert!(!in_flight.load(Ordering::Acquire));
         assert!(!pending.load(Ordering::Acquire));
+    }
+}
+
+#[cfg(test)]
+mod antigravity_crossfade_tests {
+    use super::antigravity_crossfade_frame;
+
+    #[test]
+    fn pool_crossfade_follows_the_same_phase_after_startup_sleep_and_rearming() {
+        for cycle in [0, 20_000, 180_000] {
+            for (phase, opacity, delay) in [
+                (0, 1.0, 8_000),
+                (7_000, 1.0, 1_000),
+                (8_000, 1.0, 30),
+                (9_000, 0.5, 30),
+                (10_000, 0.0, 8_000),
+                (17_000, 0.0, 1_000),
+                (18_000, 0.0, 30),
+                (19_000, 0.5, 30),
+            ] {
+                assert_eq!(antigravity_crossfade_frame(cycle + phase), (opacity, delay));
+            }
+        }
+        let before_wrap = antigravity_crossfade_frame(19_999).0;
+        assert!((1.0 - before_wrap).abs() < 0.000_001);
     }
 }

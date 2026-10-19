@@ -15,8 +15,6 @@ fn state_for(theme: ThemeDocument, placement: PlacementOverride) -> AppState {
         show_antigravity_gemini: true,
         show_antigravity_external: true,
         crossfade_opacity: 1.0,
-        crossfade_anim_start: None,
-        crossfade_target_opacity: 1.0,
         accounts: Default::default(),
         data: None,
         poll_interval_ms: POLL_15_MIN,

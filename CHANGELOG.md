@@ -4,6 +4,18 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.20.0] - 2026-10-19
+
+### Added
+
+- Track Antigravity's Gemini and Claude/GPT quota pools separately, with independent context-menu toggles and tray summaries. Compact Fluent Quad shows both pools' gauges and alternates their usage labels; existing theme bindings continue to show Gemini. ([#178](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/178))
+- Cache the pools under `antigravity_gemini` and `antigravity_external`, with the legacy `antigravity` key mirroring the external pool when reported. Show missing pools and windows as no limit data, and preserve existing settings when migrating to pool-level visibility.
+
+### Fixed
+
+- Preserve the empty named-pool safeguard when selecting quota summaries. Mark both pools stale after a failed poll, and keep crossfades synchronized after provider changes, startup, and sleep.
+- Keep pool choices independent when migrating settings, and clear pool visibility when the legacy whole-provider menu disables Antigravity. Add regression coverage for migration, cached failures, external reset polling, and animation timing.
+
 ## [2.19.10] - 2026-10-19
 
 ### Fixed
@@ -1411,3 +1423,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.8]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.7...v2.19.8
 [2.19.9]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.8...v2.19.9
 [2.19.10]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.9...v2.19.10
+[2.20.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.10...v2.20.0

@@ -354,8 +354,14 @@ pub(super) fn parse_context_menu_action_script(script: &str) -> Result<ContextMe
         ("toggle_taskbar_lock", ContextMenuAction::ToggleTaskbarLock),
         ("toggle_widget", ContextMenuAction::ToggleWidget),
         ("check_for_updates", ContextMenuAction::CheckForUpdates),
-        ("toggle_antigravity_gemini", ContextMenuAction::ToggleAntigravityGemini),
-        ("toggle_antigravity_external", ContextMenuAction::ToggleAntigravityExternal),
+        (
+            "toggle_antigravity_gemini",
+            ContextMenuAction::ToggleAntigravityGemini,
+        ),
+        (
+            "toggle_antigravity_external",
+            ContextMenuAction::ToggleAntigravityExternal,
+        ),
         ("exit", ContextMenuAction::Exit),
     ] {
         if script == format!("{name}()") {

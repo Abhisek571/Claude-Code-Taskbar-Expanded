@@ -225,8 +225,11 @@ impl SettingsFile {
             ProviderId::Claude => self.show_claude_code,
             ProviderId::Codex => self.show_codex,
             ProviderId::Antigravity => {
-                self.show_antigravity_gemini.unwrap_or(self.show_antigravity)
-                    || self.show_antigravity_external.unwrap_or(self.show_antigravity)
+                self.show_antigravity_gemini
+                    .unwrap_or(self.show_antigravity)
+                    || self
+                        .show_antigravity_external
+                        .unwrap_or(self.show_antigravity)
             }
             ProviderId::OpenCode => self.show_opencode,
             ProviderId::Cursor => self.show_cursor,
@@ -236,23 +239,29 @@ impl SettingsFile {
     }
 
     pub fn antigravity_gemini_enabled(&self) -> bool {
-        self.show_antigravity_gemini.unwrap_or(self.show_antigravity)
+        self.show_antigravity_gemini
+            .unwrap_or(self.show_antigravity)
     }
 
     pub fn antigravity_external_enabled(&self) -> bool {
-        self.show_antigravity_external.unwrap_or(self.show_antigravity)
+        self.show_antigravity_external
+            .unwrap_or(self.show_antigravity)
     }
 
     #[allow(dead_code)]
     pub fn set_antigravity_gemini_enabled(&mut self, enabled: bool) {
+        let external = self.antigravity_external_enabled();
         self.show_antigravity_gemini = Some(enabled);
-        self.show_antigravity = enabled || self.antigravity_external_enabled();
+        self.show_antigravity_external = Some(external);
+        self.show_antigravity = enabled || external;
     }
 
     #[allow(dead_code)]
     pub fn set_antigravity_external_enabled(&mut self, enabled: bool) {
+        let gemini = self.antigravity_gemini_enabled();
         self.show_antigravity_external = Some(enabled);
-        self.show_antigravity = self.antigravity_gemini_enabled() || enabled;
+        self.show_antigravity_gemini = Some(gemini);
+        self.show_antigravity = gemini || enabled;
     }
 
     pub fn set_provider_enabled(&mut self, provider: ProviderId, enabled: bool) {
@@ -763,5 +772,40 @@ mod tests {
         assert!(!settings.antigravity_external_enabled());
         settings.set_provider_enabled(ProviderId::Antigravity, true);
         assert!(settings.antigravity_gemini_enabled() && settings.antigravity_external_enabled());
+    }
+    #[test]
+    fn enabling_one_antigravity_pool_does_not_enable_the_other_on_migration() {
+        for gemini in [true, false] {
+            let mut settings = SettingsFile::default();
+            if gemini {
+                settings.set_antigravity_gemini_enabled(true);
+            } else {
+                settings.set_antigravity_external_enabled(true);
+            }
+            settings.normalize();
+            assert!(settings.provider_enabled(ProviderId::Antigravity));
+            assert_eq!(settings.antigravity_gemini_enabled(), gemini);
+            assert_eq!(settings.antigravity_external_enabled(), !gemini);
+        }
+    }
+
+    #[test]
+    fn antigravity_legacy_settings_migrate_and_disabled_pools_stay_disabled() {
+        for enabled in [true, false] {
+            let mut settings: SettingsFile = serde_json::from_value(serde_json::json!({
+                "show_antigravity": enabled
+            }))
+            .unwrap();
+            settings.normalize();
+            assert_eq!(settings.antigravity_gemini_enabled(), enabled);
+            assert_eq!(settings.antigravity_external_enabled(), enabled);
+            settings.set_provider_enabled(ProviderId::Antigravity, false);
+            let mut reloaded: SettingsFile =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            reloaded.normalize();
+            assert!(!reloaded.provider_enabled(ProviderId::Antigravity));
+            assert!(!reloaded.antigravity_gemini_enabled());
+            assert!(!reloaded.antigravity_external_enabled());
+        }
     }
 }
