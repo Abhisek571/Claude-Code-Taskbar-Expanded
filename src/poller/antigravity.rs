@@ -17,14 +17,16 @@ const EXPIRY_SKEW: Duration = Duration::from_secs(60);
 // The server returns the "Gemini 4 Argon" group only for this UA form, and
 // only from the daily endpoint; old CLI versions are rejected.
 const ANTIGRAVITY_USER_AGENT: &str = "antigravity/cli/1.4.0";
-// The production endpoint goes first: daily-cloudcode-pa answers
-// retrieveUserQuotaSummary with the Claude and GPT group only, so stopping
-// there hides the Gemini group.
-const ANTIGRAVITY_PRODUCTION_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com";
+// The daily endpoint goes first: official agy CLI queries daily-cloudcode-pa,
+// which returns accurate quota for Gemini, Claude and GPT, and Gemini 4 Argon.
+// Production cloudcode-pa returns static remainingFraction=1.0 and
+// resetTime=now+window for Gemini, but is kept as a fallback and to
+// supplement any groups daily might miss.
 const ANTIGRAVITY_DAILY_ENDPOINT: &str = "https://daily-cloudcode-pa.googleapis.com";
+const ANTIGRAVITY_PRODUCTION_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_ENDPOINTS: &[&str] = &[
-    ANTIGRAVITY_PRODUCTION_ENDPOINT,
     ANTIGRAVITY_DAILY_ENDPOINT,
+    ANTIGRAVITY_PRODUCTION_ENDPOINT,
     "https://daily-cloudcode-pa.sandbox.googleapis.com",
 ];
 
@@ -328,14 +330,16 @@ pub(super) fn fetch_antigravity_usage(token: &str) -> Result<UsageData, PollErro
     for base_url in ANTIGRAVITY_ENDPOINTS {
         match fetch_antigravity_usage_from_endpoint(base_url, token) {
             Ok(mut data) => {
-                if *base_url == ANTIGRAVITY_PRODUCTION_ENDPOINT {
-                    // Production never returns the Argon group, and its other
-                    // groups are the ones that match the official display.
-                    match fetch_antigravity_usage_from_endpoint(ANTIGRAVITY_DAILY_ENDPOINT, token)
-                    {
-                        Ok(daily) => merge_antigravity_limits(&mut data.limits, daily.limits),
+                if *base_url == ANTIGRAVITY_DAILY_ENDPOINT {
+                    // Daily is the primary endpoint matching official agy CLI.
+                    // Supplement any groups only present in production.
+                    match fetch_antigravity_usage_from_endpoint(
+                        ANTIGRAVITY_PRODUCTION_ENDPOINT,
+                        token,
+                    ) {
+                        Ok(prod) => merge_antigravity_limits(&mut data.limits, prod.limits),
                         Err(error) => diagnose::log(format!(
-                            "Antigravity daily endpoint failed, skipping its extra groups: {error:?}"
+                            "Antigravity production endpoint failed, skipping its extra groups: {error:?}"
                         )),
                     }
                 }
@@ -709,10 +713,10 @@ mod auth_tests {
     }
 
     #[test]
-    fn production_endpoint_is_tried_before_daily() {
+    fn daily_endpoint_is_tried_before_production() {
         assert_eq!(
             ANTIGRAVITY_ENDPOINTS.first(),
-            Some(&"https://cloudcode-pa.googleapis.com")
+            Some(&"https://daily-cloudcode-pa.googleapis.com")
         );
     }
 
@@ -721,7 +725,7 @@ mod auth_tests {
         assert!(ANTIGRAVITY_USER_AGENT.starts_with("antigravity/cli/"));
         assert_eq!(
             ANTIGRAVITY_ENDPOINTS.get(1),
-            Some(&ANTIGRAVITY_DAILY_ENDPOINT)
+            Some(&ANTIGRAVITY_PRODUCTION_ENDPOINT)
         );
     }
 

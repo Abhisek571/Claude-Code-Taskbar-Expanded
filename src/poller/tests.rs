@@ -466,15 +466,15 @@ fn antigravity_limits_from_json(json: &str) -> Vec<crate::models::UsageLimit> {
 const ANTIGRAVITY_PRODUCTION_SUMMARY: &str = r#"{"groups": [
     {"displayName": "Gemini Models", "buckets": [
         {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 1},
-        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.975}]},
+        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 1}]},
     {"displayName": "Claude and GPT models", "buckets": [
         {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0.5}]}
 ]}"#;
 
 const ANTIGRAVITY_DAILY_SUMMARY: &str = r#"{"groups": [
     {"displayName": "Gemini Models", "buckets": [
-        {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 1},
-        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 1}]},
+        {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.7},
+        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.9}]},
     {"displayName": "Claude and GPT models", "buckets": [
         {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0.1}]},
     {"displayName": "Gemini 4 Argon", "buckets": [
@@ -482,11 +482,11 @@ const ANTIGRAVITY_DAILY_SUMMARY: &str = r#"{"groups": [
 ]}"#;
 
 #[test]
-fn antigravity_merge_prefers_production_and_adds_daily_only_groups() {
-    let mut limits = antigravity_limits_from_json(ANTIGRAVITY_PRODUCTION_SUMMARY);
+fn antigravity_merge_prefers_daily_and_adds_production_only_groups() {
+    let mut limits = antigravity_limits_from_json(ANTIGRAVITY_DAILY_SUMMARY);
     antigravity::merge_antigravity_limits(
         &mut limits,
-        antigravity_limits_from_json(ANTIGRAVITY_DAILY_SUMMARY),
+        antigravity_limits_from_json(ANTIGRAVITY_PRODUCTION_SUMMARY),
     );
 
     let percentage = |key: &str| {
@@ -498,8 +498,9 @@ fn antigravity_merge_prefers_production_and_adds_daily_only_groups() {
             .percentage
     };
     assert_eq!(limits.len(), 4);
-    assert!((percentage("gemini_models_weekly") - 2.5).abs() < 0.000001);
-    assert!((percentage("claude_and_gpt_models_weekly") - 50.0).abs() < 0.000001);
+    assert!((percentage("gemini_models_session") - 30.0).abs() < 0.000001);
+    assert!((percentage("gemini_models_weekly") - 10.0).abs() < 0.000001);
+    assert!((percentage("claude_and_gpt_models_weekly") - 90.0).abs() < 0.000001);
     assert!((percentage("gemini_4_argon_weekly") - 18.4).abs() < 0.000001);
 }
 
