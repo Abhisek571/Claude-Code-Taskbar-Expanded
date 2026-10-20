@@ -4,6 +4,18 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.20.1] - 2026-10-20
+
+### Fixed
+
+- Cap provider Retry-After cooldowns at 15 minutes and allow one manual recovery probe per minute after the first minute. Clear the cooldown on success and preserve its original deadline after failed probes, including responses with fresh Retry-After headers and network failures. Keep Claude Messages header probes exempt from cooldowns. ([#180](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/180))
+- Retry transient failures for enabled accounts after a partially successful poll, with exponential backoff that respects cooldowns. Keep successful readings visible and restore normal polling after recovery; permanent credential errors do not trigger these retries.
+- Add regression coverage for cooldown caps, manual probe recovery and throttling, unchanged deadlines after failures, and partial account retries.
+
+### Changed
+
+- Include sanitized HTTP request methods, hosts, paths, response statuses, and cooldown suppression in diagnostic logs without recording query strings or authorization headers.
+
 ## [2.20.0] - 2026-10-19
 
 ### Added
@@ -1424,3 +1436,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.9]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.8...v2.19.9
 [2.19.10]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.9...v2.19.10
 [2.20.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.10...v2.20.0
+[2.20.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.0...v2.20.1

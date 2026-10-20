@@ -106,7 +106,7 @@ impl RetryAfter {
             return response;
         }
         let key = request_key(&request);
-        {
+        let manual_probe = {
             let now = Instant::now();
             let mut cooldowns = self.cooldowns.lock().unwrap_or_else(|e| e.into_inner());
             cooldowns.retain(|_, cooldown| !cooldown.remaining(now).is_zero());
@@ -125,14 +125,19 @@ impl RetryAfter {
                 // Admit one manual probe per minute without extending the
                 // automatic cooldown, even if the request fails to connect.
                 cooldown.last_probe = Some(now);
+                true
+            } else {
+                false
             }
-        }
+        };
 
         let response = send(request);
         log_http(&target, "", &response);
         let response = response?;
         let status = response.status();
-        if status.as_u16() == 429 || status.is_server_error() {
+        // A probe tests recovery from an existing cooldown; a failed probe
+        // must keep its original deadline, even with a new Retry-After header.
+        if !manual_probe && (status.as_u16() == 429 || status.is_server_error()) {
             if let Some(delay) = response
                 .headers()
                 .get(ureq::http::header::RETRY_AFTER)
@@ -202,7 +207,11 @@ fn log_http(target: &str, note: &str, response: &Result<HttpResponse, ureq::Erro
         Err(ureq::Error::StatusCode(status)) => status.to_string(),
         Err(_) => "failed".to_string(),
     };
-    let note = if note.is_empty() { String::new() } else { format!(" ({note})") };
+    let note = if note.is_empty() {
+        String::new()
+    } else {
+        format!(" ({note})")
+    };
     crate::diagnose::log(format!("http {target}{note} -> {outcome}"));
 }
 
@@ -336,8 +345,13 @@ mod tests {
         state
             .handle(request("first"), |_| Ok(response(429, Some("900"))))
             .unwrap();
-        state.cooldowns.lock().unwrap().get_mut(&key).unwrap().received =
-            Instant::now() - Duration::from_secs(59);
+        state
+            .cooldowns
+            .lock()
+            .unwrap()
+            .get_mut(&key)
+            .unwrap()
+            .received = Instant::now() - Duration::from_secs(59);
         assert!(matches!(
             with_manual_refresh(true, || state.handle(request("first"), |_| {
                 panic!("manual refresh sent within the first minute")
@@ -345,10 +359,17 @@ mod tests {
             Err(ureq::Error::StatusCode(429))
         ));
 
-        state.cooldowns.lock().unwrap().get_mut(&key).unwrap().received =
-            Instant::now() - Duration::from_secs(61);
+        state
+            .cooldowns
+            .lock()
+            .unwrap()
+            .get_mut(&key)
+            .unwrap()
+            .received = Instant::now() - Duration::from_secs(61);
         assert!(matches!(
-            state.handle(request("first"), |_| panic!("automatic poll bypassed cooldown")),
+            state.handle(request("first"), |_| panic!(
+                "automatic poll bypassed cooldown"
+            )),
             Err(ureq::Error::StatusCode(429))
         ));
         let mut sent = 0;
@@ -369,28 +390,111 @@ mod tests {
 
     #[test]
     fn failed_manual_probe_keeps_cooldown_and_cannot_be_repeated_immediately() {
+        let future = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(7200));
         for status in [429, 503] {
-            let state = RetryAfter::default();
-            let key = request_key(&request("first"));
-            state
-                .handle(request("first"), |_| Ok(response(status, Some("900"))))
-                .unwrap();
-            state.cooldowns.lock().unwrap().get_mut(&key).unwrap().received =
-                Instant::now() - Duration::from_secs(61);
-            with_manual_refresh(true, || {
-                let result = state.handle(request("first"), |_| Ok(response(status, None)));
-                assert_eq!(result.unwrap().status().as_u16(), status);
+            for header in [
+                None,
+                Some("900"),
+                Some("999999999999999999999999999999"),
+                Some(future.as_str()),
+            ] {
+                let state = RetryAfter::default();
+                let key = request_key(&request("first"));
+                state
+                    .handle(request("first"), |_| Ok(response(status, Some("900"))))
+                    .unwrap();
+                state
+                    .cooldowns
+                    .lock()
+                    .unwrap()
+                    .get_mut(&key)
+                    .unwrap()
+                    .received = Instant::now() - Duration::from_secs(61);
+                let original = state.cooldowns.lock().unwrap()[&key];
+                with_manual_refresh(true, || {
+                    let result = state.handle(request("first"), |_| Ok(response(status, header)));
+                    assert_eq!(result.unwrap().status().as_u16(), status);
+                    let after_probe = state.cooldowns.lock().unwrap()[&key];
+                    assert_eq!(
+                        after_probe.received, original.received,
+                        "probe extended the deadline"
+                    );
+                    assert_eq!(after_probe.delay, original.delay);
+                    assert!(after_probe.last_probe.is_some());
+                    assert!(matches!(
+                        state.handle(request("first"), |_| panic!("repeated manual probe")),
+                        Err(ureq::Error::StatusCode(code)) if code == status
+                    ));
+                });
                 assert!(matches!(
-                    state.handle(request("first"), |_| panic!("repeated manual probe")),
+                    state.handle(request("first"), |_| panic!("automatic poll bypassed cooldown")),
                     Err(ureq::Error::StatusCode(code)) if code == status
                 ));
-            });
-            assert!(matches!(
-                state.handle(request("first"), |_| panic!("automatic poll bypassed cooldown")),
-                Err(ureq::Error::StatusCode(code)) if code == status
-            ));
-            assert!(state.cooldowns.lock().unwrap().contains_key(&key));
+                assert!(state.cooldowns.lock().unwrap().contains_key(&key));
+                // After a minute, another manual probe is allowed, while the
+                // original automatic deadline still permits recovery on expiry.
+                state
+                    .cooldowns
+                    .lock()
+                    .unwrap()
+                    .get_mut(&key)
+                    .unwrap()
+                    .last_probe = Some(Instant::now() - Duration::from_secs(61));
+                with_manual_refresh(true, || {
+                    state
+                        .handle(request("first"), |_| Ok(response(status, header)))
+                        .unwrap();
+                });
+                assert_eq!(
+                    state.cooldowns.lock().unwrap()[&key].received,
+                    original.received
+                );
+                state
+                    .cooldowns
+                    .lock()
+                    .unwrap()
+                    .get_mut(&key)
+                    .unwrap()
+                    .received = Instant::now() - MAX_RETRY_AFTER;
+                assert!(state
+                    .handle(request("first"), |_| Ok(response(200, None)))
+                    .is_ok());
+                assert!(state.cooldowns.lock().unwrap().is_empty());
+            }
         }
+    }
+
+    #[test]
+    fn disconnected_manual_probe_preserves_deadline_and_probe_throttle() {
+        let state = RetryAfter::default();
+        let key = request_key(&request("first"));
+        state
+            .handle(request("first"), |_| Ok(response(429, Some("900"))))
+            .unwrap();
+        state
+            .cooldowns
+            .lock()
+            .unwrap()
+            .get_mut(&key)
+            .unwrap()
+            .received = Instant::now() - Duration::from_secs(61);
+        let original = state.cooldowns.lock().unwrap()[&key];
+        with_manual_refresh(true, || {
+            assert!(matches!(
+                state.handle(request("first"), |_| Err(ureq::Error::Io(
+                    std::io::Error::new(std::io::ErrorKind::ConnectionReset, "disconnected probe")
+                ))),
+                Err(ureq::Error::Io(_))
+            ));
+            let after_probe = state.cooldowns.lock().unwrap()[&key];
+            assert_eq!(after_probe.received, original.received);
+            assert_eq!(after_probe.delay, original.delay);
+            assert!(after_probe.last_probe.is_some());
+            assert!(matches!(
+                state.handle(request("first"), |_| panic!("repeated disconnected probe")),
+                Err(ureq::Error::StatusCode(429))
+            ));
+        });
     }
 
     #[test]
