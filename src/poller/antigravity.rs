@@ -395,9 +395,10 @@ pub(super) fn fetch_antigravity_usage_from_endpoint(
     }
 }
 
-/// Fallback when the quota summary is unavailable: keep the two pools apart,
-/// Gemini models in the primary pool and Claude/GPT models in the external one.
-pub(super) fn antigravity_usage_from_models(models: &AntigravityModelsResponse) -> Option<UsageData> {
+/// Fallback when the quota summary is unavailable: Gemini models only.
+pub(super) fn antigravity_usage_from_models(
+    models: &AntigravityModelsResponse,
+) -> Option<UsageData> {
     let gemini = best_gemini_model_quota(models);
     // Claude/GPT model quotas do not say whether they are the 5h or the weekly
     // window, so the external pool is left as "no limit data" here rather
@@ -590,6 +591,7 @@ pub(super) fn antigravity_usage_from_summary(
 ) -> Option<UsageData> {
     let mut gemini_usage = None;
     let mut external_usage = None;
+    let mut has_named_pool = false;
     let mut other_groups = Vec::new();
 
     // A summary that returns a group list (even an empty one) answered
@@ -600,21 +602,26 @@ pub(super) fn antigravity_usage_from_summary(
     for group in groups {
         let is_gemini = is_antigravity_gemini_summary_group(&group);
         let is_external = is_antigravity_external_summary_group(&group);
+        has_named_pool |= is_gemini || is_external;
         let usage = antigravity_usage_from_summary_group(group);
 
-        if is_gemini && gemini_usage.is_none() {
-            gemini_usage = usage;
-        } else if is_external && external_usage.is_none() {
-            external_usage = usage;
-        } else if let Some(u) = usage {
-            other_groups.push(u);
+        if is_gemini {
+            if gemini_usage.is_none() {
+                gemini_usage = usage;
+            }
+        } else if is_external {
+            if external_usage.is_none() {
+                external_usage = usage;
+            }
+        } else if let Some(usage) = usage {
+            other_groups.push(usage);
         }
     }
 
     // An unrecognised group is assigned only when it is the sole group with
     // quota and no named pool exists; otherwise a position guess could show one
     // pool's usage under the other's label.
-    if gemini_usage.is_none() && external_usage.is_none() && other_groups.len() == 1 {
+    if !has_named_pool && other_groups.len() == 1 {
         gemini_usage = other_groups.pop();
     }
 
@@ -635,38 +642,23 @@ pub(super) fn antigravity_usage_from_summary(
 }
 
 pub(super) fn is_antigravity_external_summary_group(group: &AntigravityQuotaSummaryGroup) -> bool {
-    group
-        .display_name
-        .as_deref()
-        .is_some_and(|name| {
-            let n = name.to_ascii_lowercase();
-            n.contains("claude") || n.contains("gpt") || n.contains("external")
-        })
-        || group
-            .description
-            .as_deref()
-            .is_some_and(|description| {
-                let d = description.to_ascii_lowercase();
-                d.contains("claude") || d.contains("gpt") || d.contains("external")
-            })
-        || group.buckets.as_ref().is_some_and(|buckets| {
-            buckets.iter().any(|bucket| {
-                bucket
-                    .bucket_id
-                    .as_deref()
-                    .is_some_and(|id| {
-                        let id = id.to_ascii_lowercase();
-                        id.starts_with("claude-") || id.starts_with("gpt-") || id.starts_with("3p-")
-                    })
-                    || bucket
-                        .display_name
-                        .as_deref()
-                        .is_some_and(|name| {
-                            let n = name.to_ascii_lowercase();
-                            n.contains("claude") || n.contains("gpt")
-                        })
+    group.display_name.as_deref().is_some_and(|name| {
+        let n = name.to_ascii_lowercase();
+        n.contains("claude") || n.contains("gpt") || n.contains("external")
+    }) || group.description.as_deref().is_some_and(|description| {
+        let d = description.to_ascii_lowercase();
+        d.contains("claude") || d.contains("gpt") || d.contains("external")
+    }) || group.buckets.as_ref().is_some_and(|buckets| {
+        buckets.iter().any(|bucket| {
+            bucket.bucket_id.as_deref().is_some_and(|id| {
+                let id = id.to_ascii_lowercase();
+                id.starts_with("claude-") || id.starts_with("gpt-") || id.starts_with("3p-")
+            }) || bucket.display_name.as_deref().is_some_and(|name| {
+                let n = name.to_ascii_lowercase();
+                n.contains("claude") || n.contains("gpt")
             })
         })
+    })
 }
 
 pub(super) fn antigravity_usage_from_summary_group(
@@ -957,4 +949,3 @@ mod auth_tests {
         assert_eq!(current.token.refresh_token.as_deref(), Some("refresh"));
     }
 }
-

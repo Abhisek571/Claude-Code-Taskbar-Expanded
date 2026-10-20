@@ -3281,13 +3281,21 @@ fn compact_fluent_quad_antigravity_dual_and_solo_modes() {
 
     // 1. Solo Gemini
     {
-        let runtime = ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Antigravity]))
-            .with_antigravity_pools(true, false, 1.0);
-        let mut context = DataContext::from_usage_with_runtime(Some(&usage), &Canvas::default(), runtime);
+        let runtime =
+            ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Antigravity]))
+                .with_antigravity_pools(true, false, 1.0);
+        let mut context =
+            DataContext::from_usage_with_runtime(Some(&usage), &Canvas::default(), runtime);
         context.insert("system.dark", 1.0);
         assert_eq!(evaluate("antigravity.dual_mode", &context).unwrap(), 0.0);
-        assert_eq!(evaluate("antigravity.gemini.enabled", &context).unwrap(), 1.0);
-        assert_eq!(evaluate("antigravity.external.enabled", &context).unwrap(), 0.0);
+        assert_eq!(
+            evaluate("antigravity.gemini.enabled", &context).unwrap(),
+            1.0
+        );
+        assert_eq!(
+            evaluate("antigravity.external.enabled", &context).unwrap(),
+            0.0
+        );
 
         let find_render = |id: &str| {
             theme.surfaces[0]
@@ -3308,13 +3316,21 @@ fn compact_fluent_quad_antigravity_dual_and_solo_modes() {
 
     // 2. Solo External
     {
-        let runtime = ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Antigravity]))
-            .with_antigravity_pools(false, true, 1.0);
-        let mut context = DataContext::from_usage_with_runtime(Some(&usage), &Canvas::default(), runtime);
+        let runtime =
+            ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Antigravity]))
+                .with_antigravity_pools(false, true, 1.0);
+        let mut context =
+            DataContext::from_usage_with_runtime(Some(&usage), &Canvas::default(), runtime);
         context.insert("system.dark", 1.0);
         assert_eq!(evaluate("antigravity.dual_mode", &context).unwrap(), 0.0);
-        assert_eq!(evaluate("antigravity.gemini.enabled", &context).unwrap(), 0.0);
-        assert_eq!(evaluate("antigravity.external.enabled", &context).unwrap(), 1.0);
+        assert_eq!(
+            evaluate("antigravity.gemini.enabled", &context).unwrap(),
+            0.0
+        );
+        assert_eq!(
+            evaluate("antigravity.external.enabled", &context).unwrap(),
+            1.0
+        );
 
         let find_render = |id: &str| {
             theme.surfaces[0]
@@ -3336,9 +3352,11 @@ fn compact_fluent_quad_antigravity_dual_and_solo_modes() {
     // 3. Dual Mode Crossfade
     {
         // At opacity 1.0 (Gemini holding)
-        let runtime = ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Antigravity]))
-            .with_antigravity_pools(true, true, 1.0);
-        let mut context = DataContext::from_usage_with_runtime(Some(&usage), &Canvas::default(), runtime);
+        let runtime =
+            ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Antigravity]))
+                .with_antigravity_pools(true, true, 1.0);
+        let mut context =
+            DataContext::from_usage_with_runtime(Some(&usage), &Canvas::default(), runtime);
         context.insert("system.dark", 1.0);
         assert_eq!(evaluate("antigravity.dual_mode", &context).unwrap(), 1.0);
 
@@ -3359,9 +3377,11 @@ fn compact_fluent_quad_antigravity_dual_and_solo_modes() {
         assert!(!find_render("antigravity-session-external-value-dark"));
 
         // At opacity 0.5 (Mid-transition)
-        let runtime_mid = ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Antigravity]))
-            .with_antigravity_pools(true, true, 0.5);
-        let mut context_mid = DataContext::from_usage_with_runtime(Some(&usage), &Canvas::default(), runtime_mid);
+        let runtime_mid =
+            ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Antigravity]))
+                .with_antigravity_pools(true, true, 0.5);
+        let mut context_mid =
+            DataContext::from_usage_with_runtime(Some(&usage), &Canvas::default(), runtime_mid);
         context_mid.insert("system.dark", 1.0);
         let find_render_mid = |id: &str| {
             theme.surfaces[0]
@@ -3375,9 +3395,11 @@ fn compact_fluent_quad_antigravity_dual_and_solo_modes() {
         assert!(find_render_mid("antigravity-session-external-value-dark"));
 
         // At opacity 0.0 (External holding)
-        let runtime_ext = ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Antigravity]))
-            .with_antigravity_pools(true, true, 0.0);
-        let mut context_ext = DataContext::from_usage_with_runtime(Some(&usage), &Canvas::default(), runtime_ext);
+        let runtime_ext =
+            ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Antigravity]))
+                .with_antigravity_pools(true, true, 0.0);
+        let mut context_ext =
+            DataContext::from_usage_with_runtime(Some(&usage), &Canvas::default(), runtime_ext);
         context_ext.insert("system.dark", 1.0);
         let find_render_ext = |id: &str| {
             theme.surfaces[0]
@@ -3413,12 +3435,8 @@ fn missing_antigravity_external_pool_draws_an_empty_gauge() {
         ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Antigravity]))
             .with_countdown(true),
     );
-    let value = |expression: &str| {
-        evaluate(expression, &context)
-            .unwrap()
-    };
+    let value = |expression: &str| evaluate(expression, &context).unwrap();
     assert_eq!(value("antigravity.gemini.session.display"), 75.0);
     assert_eq!(value("antigravity.gemini.weekly.display"), 0.0);
     assert_eq!(value("antigravity.external.session.display"), 0.0);
 }
-

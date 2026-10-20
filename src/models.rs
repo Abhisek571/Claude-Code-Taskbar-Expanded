@@ -108,6 +108,13 @@ pub struct UsageLimit {
 }
 
 impl UsageData {
+    pub fn mark_stale(&mut self) {
+        self.stale = true;
+        if let Some(pool) = self.external_pool.as_deref_mut() {
+            pool.mark_stale();
+        }
+    }
+
     pub fn sections(&self) -> impl Iterator<Item = &UsageSection> {
         let external_sections: Box<dyn Iterator<Item = &UsageSection>> = match &self.external_pool {
             Some(pool) => Box::new(pool.sections()),
@@ -374,16 +381,25 @@ impl<'de> Deserialize<'de> for AppUsageData {
             .collect();
 
         let agy_usage = gemini_val
-            .and_then(|v| serde_json::from_value::<Option<UsageData>>(v).ok().flatten())
+            .and_then(|v| {
+                serde_json::from_value::<Option<UsageData>>(v)
+                    .ok()
+                    .flatten()
+            })
             .or_else(|| {
-                legacy_agy_val
-                    .and_then(|v| serde_json::from_value::<Option<UsageData>>(v).ok().flatten())
+                legacy_agy_val.and_then(|v| {
+                    serde_json::from_value::<Option<UsageData>>(v)
+                        .ok()
+                        .flatten()
+                })
             });
 
         if let Some(mut agy) = agy_usage {
-            if let Some(ext) = external_val
-                .and_then(|v| serde_json::from_value::<Option<UsageData>>(v).ok().flatten())
-            {
+            if let Some(ext) = external_val.and_then(|v| {
+                serde_json::from_value::<Option<UsageData>>(v)
+                    .ok()
+                    .flatten()
+            }) {
                 agy.external_pool = Some(Box::new(ext));
             }
             data.insert(ProviderId::Antigravity, agy);
@@ -568,9 +584,13 @@ mod tests {
 
         // Deserialization round-trip
         let decoded: AppUsageData = serde_json::from_value(json).unwrap();
-        let agy = decoded.get(ProviderId::Antigravity).expect("Antigravity present");
+        let agy = decoded
+            .get(ProviderId::Antigravity)
+            .expect("Antigravity present");
         assert_eq!(agy.session.percentage, 15.0);
-        let ext = decoded.antigravity_external().expect("External pool present");
+        let ext = decoded
+            .antigravity_external()
+            .expect("External pool present");
         assert_eq!(ext.session.percentage, 60.0);
         assert_eq!(ext.weekly.percentage, 80.0);
 
@@ -594,7 +614,10 @@ mod tests {
     fn absent_window_is_cached_without_a_percentage() {
         let section = UsageSection::default();
         let json = serde_json::to_value(&section).unwrap();
-        assert!(json["percentage"].is_null(), "readers must not see 0% for an absent window");
+        assert!(
+            json["percentage"].is_null(),
+            "readers must not see 0% for an absent window"
+        );
         let decoded: UsageSection = serde_json::from_value(json).unwrap();
         assert_eq!(decoded, section);
     }

@@ -169,7 +169,7 @@ pub fn carry_forward_failures(
         }
         if let Some(last) = previous.get(provider) {
             let mut carried = last.clone();
-            carried.stale = true;
+            carried.mark_stale();
             merged.insert(provider, carried);
         }
     }

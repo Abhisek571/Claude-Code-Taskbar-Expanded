@@ -1539,7 +1539,8 @@ impl DataContext {
             "antigravity.external.enabled",
             runtime.antigravity_external_enabled as u8 as f64,
         );
-        let agy_dual_mode = runtime.antigravity_gemini_enabled && runtime.antigravity_external_enabled;
+        let agy_dual_mode =
+            runtime.antigravity_gemini_enabled && runtime.antigravity_external_enabled;
         context.insert("antigravity.dual_mode", agy_dual_mode as u8 as f64);
         context.insert(
             "antigravity.crossfade_opacity",
@@ -1690,7 +1691,7 @@ impl DataContext {
         self.insert(&format!("{name}.session.remaining"), 100.0 - session);
         // An Antigravity pool window that was not reported draws an empty
         // gauge in either usage direction instead of a full "remaining" one.
-        let shown_session = if name.starts_with("antigravity") && !(session_available) {
+        let shown_session = if name.starts_with("antigravity") && !session_available {
             0.0
         } else {
             display(session)
@@ -1700,7 +1701,9 @@ impl DataContext {
         self.insert(&format!("{name}.five_hour.remaining"), 100.0 - five_hour);
         // An Antigravity pool window that was not reported draws an empty
         // gauge in either usage direction instead of a full "remaining" one.
-        let shown_five_hour = if name.starts_with("antigravity") && !(usage.is_some_and(|usage| usage.session.available)) {
+        let shown_five_hour = if name.starts_with("antigravity")
+            && !usage.is_some_and(|usage| usage.session.available)
+        {
             0.0
         } else {
             display(five_hour)
@@ -1710,7 +1713,7 @@ impl DataContext {
         self.insert(&format!("{name}.weekly.remaining"), 100.0 - weekly);
         // An Antigravity pool window that was not reported draws an empty
         // gauge in either usage direction instead of a full "remaining" one.
-        let shown_weekly = if name.starts_with("antigravity") && !(weekly_available) {
+        let shown_weekly = if name.starts_with("antigravity") && !weekly_available {
             0.0
         } else {
             display(weekly)

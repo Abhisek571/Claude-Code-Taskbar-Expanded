@@ -128,71 +128,8 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     render_layered();
                 }
                 TIMER_CROSSFADE_SCHEDULE => {
-                    let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
-                    let mut state = lock_state();
-                    if let Some(s) = state.as_mut() {
-                        if s.show_antigravity_gemini
-                            && s.show_antigravity_external
-                            && s.providers.contains(ProviderId::Antigravity)
-                        {
-                            s.crossfade_target_opacity = if s.crossfade_opacity > 0.5 { 0.0 } else { 1.0 };
-                            s.crossfade_anim_start = Some(Instant::now());
-                            unsafe {
-                                let _ = SetTimer(Some(hwnd), TIMER_CROSSFADE_ANIM, 30, None);
-                            }
-                        }
-                    }
-                }
-                TIMER_CROSSFADE_ANIM => {
-                    let (completed, _op) = {
-                        let mut state = lock_state();
-                        if let Some(s) = state.as_mut() {
-                            if !s.show_antigravity_gemini
-                                || !s.show_antigravity_external
-                                || !s.providers.contains(ProviderId::Antigravity)
-                            {
-                                (true, 1.0)
-                            } else if let Some(start) = s.crossfade_anim_start {
-                                let elapsed = start.elapsed().as_secs_f64();
-                                let progress = (elapsed / 2.0).clamp(0.0, 1.0);
-                                // Smoothstep ease-in-out: 3*p^2 - 2*p^3
-                                let t = progress * progress * (3.0 - 2.0 * progress);
-                                let start_op = if s.crossfade_target_opacity == 0.0 { 1.0 } else { 0.0 };
-                                let current_op = start_op + (s.crossfade_target_opacity - start_op) * t;
-                                s.crossfade_opacity = current_op;
-                                if progress >= 1.0 {
-                                    s.crossfade_opacity = s.crossfade_target_opacity;
-                                    s.crossfade_anim_start = None;
-                                    (true, s.crossfade_opacity)
-                                } else {
-                                    (false, current_op)
-                                }
-                            } else {
-                                (true, s.crossfade_opacity)
-                            }
-                        } else {
-                            (true, 1.0)
-                        }
-                    };
+                    arm_crossfade_schedule(hwnd);
                     render_layered();
-                    if completed {
-                        unsafe {
-                            let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_ANIM);
-                        }
-                        let dual_mode = {
-                            let state = lock_state();
-                            state.as_ref().is_some_and(|s| {
-                                s.show_antigravity_gemini
-                                    && s.show_antigravity_external
-                                    && s.providers.contains(ProviderId::Antigravity)
-                            })
-                        };
-                        if dual_mode {
-                            unsafe {
-                                let _ = SetTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE, 8_000, None);
-                            }
-                        }
-                    }
                 }
                 _ => {}
             }
@@ -904,11 +841,8 @@ pub(super) unsafe extern "system" fn wnd_proc(
                                 if !dual_mode {
                                     unsafe {
                                         let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
-                                        let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_ANIM);
                                     }
                                     s.crossfade_opacity = 1.0;
-                                    s.crossfade_anim_start = None;
-                                    s.crossfade_target_opacity = 1.0;
                                 }
                             }
                         }
@@ -931,21 +865,14 @@ pub(super) unsafe extern "system" fn wnd_proc(
                         if let Some(s) = state.as_mut() {
                             let provider = ProviderId::from_native_menu_command_id(id)
                                 .expect("provider menu command was matched above");
-                            s.providers.toggle(provider);
-                            if provider == ProviderId::Antigravity {
-                                if s.providers.contains(ProviderId::Antigravity) {
-                                    if !s.show_antigravity_gemini && !s.show_antigravity_external {
-                                        s.show_antigravity_gemini = true;
-                                        s.show_antigravity_external = true;
-                                    }
-                                } else {
-                                    unsafe {
-                                        let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
-                                        let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_ANIM);
-                                    }
+                            let changed = s.providers.toggle(provider);
+                            if provider == ProviderId::Antigravity && changed {
+                                let enabled = s.providers.contains(ProviderId::Antigravity);
+                                s.show_antigravity_gemini = enabled;
+                                s.show_antigravity_external = enabled;
+                                if !enabled {
+                                    let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
                                     s.crossfade_opacity = 1.0;
-                                    s.crossfade_anim_start = None;
-                                    s.crossfade_target_opacity = 1.0;
                                 }
                             }
                             dual_mode = s.show_antigravity_gemini
