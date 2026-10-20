@@ -4,6 +4,13 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.20.2] - 2026-10-20
+
+### Fixed
+
+- Pin English in the shared Theme Studio test app so UI text assertions pass independently of the Windows display language. ([#179](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/179))
+- Update the transitive `webpki-root-certs` dependency from 1.0.9 to 1.0.10 to resolve RUSTSEC-2026-0383 found by the release dependency checks.
+
 ## [2.20.1] - 2026-10-20
 
 ### Fixed
@@ -1437,3 +1444,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.10]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.9...v2.19.10
 [2.20.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.10...v2.20.0
 [2.20.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.0...v2.20.1
+[2.20.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.1...v2.20.2
