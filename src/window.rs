@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -8,9 +8,12 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::Diagnostics::Debug::IsDebuggerPresent;
 use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
 use windows::Win32::System::Registry::*;
-use windows::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+use windows::Win32::System::Threading::{
+    CreateMutexW, GetCurrentProcess, TerminateProcess, WaitForSingleObject,
+};
 use windows::Win32::UI::Accessibility::HWINEVENTHOOK;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::*;
@@ -29,11 +32,11 @@ use crate::diagnose;
 use crate::localization::{self, LanguageId, Strings};
 use crate::models::AppUsageData;
 use crate::native_interop::{
-    self, TIMER_CLOCK, TIMER_COUNTDOWN, TIMER_CROSSFADE_ANIM, TIMER_CROSSFADE_SCHEDULE,
-    TIMER_MOUSE_CLICK, TIMER_POLL, TIMER_RESET_POLL, TIMER_TRAY_HOVER, TIMER_TRAY_REPOSITION,
-    TIMER_UPDATE_CHECK, TIMER_WINDOW_STATE, WM_APP_DISABLE_DIAGNOSTICS,
-    WM_APP_ENABLE_DIAGNOSTICS, WM_APP_OPEN_DASHBOARD, WM_APP_QUIT, WM_APP_REFRESH_NOW,
-    WM_APP_SETTINGS_UPDATED, WM_APP_TASKBAR_COLLISION, WM_APP_TRAY, WM_APP_USAGE_UPDATED,
+    self, TIMER_CLOCK, TIMER_COUNTDOWN, TIMER_CROSSFADE_SCHEDULE, TIMER_MOUSE_CLICK, TIMER_POLL,
+    TIMER_RESET_POLL, TIMER_TRAY_HOVER, TIMER_TRAY_REPOSITION, TIMER_UPDATE_CHECK,
+    TIMER_WINDOW_STATE, WM_APP_DISABLE_DIAGNOSTICS, WM_APP_ENABLE_DIAGNOSTICS,
+    WM_APP_OPEN_DASHBOARD, WM_APP_QUIT, WM_APP_REFRESH_NOW, WM_APP_SETTINGS_UPDATED,
+    WM_APP_TASKBAR_COLLISION, WM_APP_TRAY, WM_APP_USAGE_UPDATED,
 };
 use crate::poller;
 use crate::providers::{ProviderId, ProviderSet};
@@ -97,8 +100,6 @@ struct AppState {
     pub(super) show_antigravity_gemini: bool,
     pub(super) show_antigravity_external: bool,
     crossfade_opacity: f64,
-    crossfade_anim_start: Option<Instant>,
-    crossfade_target_opacity: f64,
     accounts: crate::accounts::AccountSettings,
 
     data: Option<AppUsageData>,
@@ -242,6 +243,46 @@ fn open_web_url(hwnd: HWND, url: &str, failure_message: &'static str) {
 const TASKBAR_WATCH_INTERVAL_SECS: u64 = 2;
 
 const TASKBAR_COLLISION_REPOSITION: usize = 2;
+
+/// How long the UI thread may stay unresponsive before the hang watchdog treats
+/// the widget as wedged and replaces it with a fresh process. Long enough that a
+/// slow repaint or a busy shell never costs a relaunch.
+const UI_HANG_RECOVERY_SECS: u64 = 30;
+
+/// Consecutive unanswered probes required on top of that delay. Elapsed time
+/// alone would also count a system sleep that began while a probe was failing,
+/// and relaunch on wake after a single missed probe on either side of it.
+const UI_HANG_MIN_SILENT_PROBES: u32 = 10;
+
+/// A long scheduling gap (for example, system sleep) breaks a run of probes.
+const UI_HANG_MAX_PROBE_GAP_SECS: u64 = 10;
+
+/// How long a single liveness probe waits for the UI thread to answer.
+const UI_PROBE_TIMEOUT_MS: u32 = 1_000;
+
+/// Environment counter of back-to-back hang relaunches. A replacement that
+/// freezes in turn, behind an explorer.exe that stays hung for instance, is
+/// given twice as long as the previous one before the next attempt, instead of
+/// being replaced every half minute for as long as the cause lasts.
+const ENV_HANG_RELAUNCHES: &str = "CCUM_HANG_RELAUNCHES";
+
+/// A hang relaunch only extends the streak when the replacement freezes within
+/// this long of being started; past it, the next hang starts over at 30 s.
+const HANG_STREAK_WINDOW_SECS: u64 = 600;
+
+/// Cap on the doubling: 30 s, then 1, 2, 4 and at most 8 minutes.
+const HANG_BACKOFF_MAX_DOUBLINGS: u32 = 4;
+
+/// Main window handle published for the hang watchdog outside of `STATE`.
+///
+/// The hang watchdog has to diagnose a wedged UI thread even when that thread
+/// is wedged while holding the state mutex, so it never takes that lock. Written
+/// once, right after the window is created.
+static PRIMARY_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// Set by the first watchdog that commits to a relaunch, so the surface and hang
+/// watchdogs cannot both spawn a replacement in the same instant.
+static RELAUNCH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 static SUPPRESS_TRAY_REPOSITION_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -396,7 +437,8 @@ const ENV_RELAUNCH: &str = "CCUM_RELAUNCH";
 /// the child so it can detect a relaunch storm.
 const ENV_LAST_RELAUNCH_UNIX: &str = "CCUM_LAST_RELAUNCH_UNIX";
 
-/// Relaunch the widget as a fresh process after explorer.exe has restarted.
+/// Relaunch the widget as a fresh process after explorer.exe has restarted, or
+/// once its UI thread has stopped answering (see `spawn_ui_hang_watchdog`).
 ///
 /// When the shell restarts it destroys our embedded child window outright (the
 /// window is gone, not merely orphaned - `IsWindow` returns false) and leaves
@@ -406,6 +448,24 @@ const ENV_LAST_RELAUNCH_UNIX: &str = "CCUM_LAST_RELAUNCH_UNIX";
 /// via `ENV_RELAUNCH` so it waits for this instance's single-instance mutex to
 /// be released before taking over (see the guard in `run`).
 fn relaunch_self() {
+    relaunch_self_for(RelaunchCause::ShellRestart);
+}
+
+/// What prompted a relaunch, which decides how the old process steps aside.
+#[derive(Clone, Copy)]
+enum RelaunchCause {
+    /// explorer.exe restarted and took a shell-hosted surface with it.
+    ShellRestart,
+    /// The UI thread stopped answering. `streak` counts the hang relaunches
+    /// that led straight up to this one.
+    UiHang { streak: u32 },
+}
+
+fn relaunch_self_for(cause: RelaunchCause) {
+    if RELAUNCH_IN_PROGRESS.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
     // Back off if we are relaunching very soon after the relaunch that spawned
     // us: that signals the shell is crash-looping, not a one-off restart.
     let now = now_unix_secs();
@@ -414,33 +474,206 @@ fn relaunch_self() {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
     if last != 0 && now.saturating_sub(last) < RELAUNCH_THROTTLE_SECS {
-        diagnose::log("relaunch storm detected; backing off before relaunching");
+        diagnose::log_recovery("relaunch storm detected; backing off before relaunching");
         std::thread::sleep(Duration::from_secs(RELAUNCH_BACKOFF_SECS));
     }
 
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(error) => {
-            diagnose::log_error("watchdog: unable to resolve current executable", error);
+            diagnose::log_recovery(format!(
+                "watchdog: unable to resolve current executable: {error}"
+            ));
+            RELAUNCH_IN_PROGRESS.store(false, Ordering::Release);
             return;
         }
     };
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match std::process::Command::new(exe)
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // Without this the replacement truncates the log on startup and takes the
+    // reason for its own relaunch with it - the one entry worth reading after
+    // the widget has recovered on its own. Diagnostics switched on from the
+    // dashboard leave no flag on the command line, and --diagnose-append is
+    // only read alongside --diagnose, so both are carried over.
+    if diagnose::is_enabled() {
+        for flag in ["--diagnose", "--diagnose-append"] {
+            if !args.iter().any(|arg| arg == flag) {
+                args.push(flag.to_string());
+            }
+        }
+    }
+    let mut command = std::process::Command::new(exe);
+    command
         .args(&args)
         .env(ENV_RELAUNCH, "1")
         .env(ENV_LAST_RELAUNCH_UNIX, now.to_string())
-        .spawn()
-    {
+        .env_remove(ENV_HANG_RELAUNCHES);
+    if let RelaunchCause::UiHang { streak } = cause {
+        command.env(ENV_HANG_RELAUNCHES, streak.saturating_add(1).to_string());
+    }
+    match command.spawn() {
         Ok(_) => {
-            diagnose::log("watchdog: relaunched fresh instance, exiting old one");
+            diagnose::log_recovery("watchdog: relaunched fresh instance, exiting old one");
+            if matches!(cause, RelaunchCause::UiHang { .. }) {
+                // ExitProcess runs DLL detach code after terminating the other
+                // threads, and deadlocks if one of them held a lock that code
+                // needs; with the UI thread wedged in an unknown call, the
+                // state of our threads is exactly what we do not know.
+                // TerminateProcess skips that teardown, and nothing left here
+                // needs it: the log is flushed line by line.
+                unsafe {
+                    let _ = TerminateProcess(GetCurrentProcess(), 0);
+                }
+            }
             std::process::exit(0);
         }
         Err(error) => {
-            diagnose::log_error("watchdog: unable to spawn relaunched instance", error);
+            diagnose::log_recovery(format!(
+                "watchdog: unable to spawn relaunched instance: {error}"
+            ));
+            RELAUNCH_IN_PROGRESS.store(false, Ordering::Release);
         }
     }
+}
+
+/// Ask the UI thread to acknowledge an empty message.
+///
+/// The hang watchdog runs on its own thread, so `SendMessageTimeoutW` here is
+/// answered by the window's owning thread: it comes back at once while the
+/// message loop is pumping, and times out once that loop is parked inside a
+/// call that never returns.
+///
+/// The probe is sent every cycle rather than gated behind `IsHungAppWindow`,
+/// which stayed false while the UI thread of a taskbar-embedded widget was
+/// suspended, and only turned true once a frozen widget had been orphaned.
+fn ui_thread_responds(hwnd: HWND) -> bool {
+    unsafe {
+        // A destroyed window belongs to the surface watchdog, not this one;
+        // calling it responsive keeps the two verdicts from overlapping.
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return true;
+        }
+        let mut acknowledged = 0usize;
+        SendMessageTimeoutW(
+            hwnd,
+            WM_NULL,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG,
+            UI_PROBE_TIMEOUT_MS,
+            Some(&mut acknowledged),
+        )
+        .0 != 0
+    }
+}
+
+/// Relaunch the widget once its UI thread stops answering messages.
+///
+/// A UI thread parked in a call that never returns keeps every window handle
+/// valid and every parent alive, so the surface watchdog sees nothing wrong
+/// while the widget stops drawing and stops polling - in the case that prompted
+/// this, for well over an hour. The probe runs on its own thread and never
+/// takes the state mutex: a UI thread wedged while holding that lock is
+/// precisely what it has to survive, and the surface watchdog does take it.
+fn spawn_ui_hang_watchdog() {
+    std::thread::spawn(move || {
+        let mut silence: Option<UiSilence> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(TASKBAR_WATCH_INTERVAL_SECS));
+            // Stepping through the UI thread in a debugger leaves it as silent
+            // as a wedged one, and a relaunch would end the debugging session.
+            if unsafe { IsDebuggerPresent() }.as_bool() {
+                silence = None;
+                continue;
+            }
+            let primary = SendHwnd(PRIMARY_HWND.load(Ordering::Relaxed)).to_hwnd();
+            if primary.is_invalid() || ui_thread_responds(primary) {
+                silence = None;
+                continue;
+            }
+            let now = Instant::now();
+            let current = silence.get_or_insert_with(|| {
+                UiSilence::new(
+                    now,
+                    hang_relaunch_streak(
+                        std::env::var(ENV_HANG_RELAUNCHES).ok().as_deref(),
+                        std::env::var(ENV_LAST_RELAUNCH_UNIX).ok().as_deref(),
+                        now_unix_secs(),
+                    ),
+                )
+            });
+            current.record_probe(now);
+            let delay = hang_recovery_delay(current.streak);
+            // Elapsed time rather than a cycle count alone: a probe that times
+            // out makes its own cycle longer than the sleep interval.
+            if current.recovery_due(now) {
+                let streak = current.streak;
+                diagnose::log_recovery(format!(
+                    "watchdog: UI thread stopped answering for {}s -> relaunching",
+                    delay.as_secs()
+                ));
+                silence = None;
+                relaunch_self_for(RelaunchCause::UiHang { streak });
+            }
+        }
+    });
+}
+
+/// An unbroken run of unanswered probes, with the streak it is measured against.
+struct UiSilence {
+    since: Instant,
+    last_probe: Instant,
+    silent_probes: u32,
+    streak: u32,
+}
+
+impl UiSilence {
+    fn new(now: Instant, streak: u32) -> Self {
+        Self {
+            since: now,
+            last_probe: now,
+            silent_probes: 0,
+            streak,
+        }
+    }
+
+    fn record_probe(&mut self, now: Instant) {
+        if now.duration_since(self.last_probe) >= Duration::from_secs(UI_HANG_MAX_PROBE_GAP_SECS) {
+            self.since = now;
+            self.silent_probes = 0;
+        }
+        self.last_probe = now;
+        self.silent_probes = self.silent_probes.saturating_add(1);
+    }
+
+    fn recovery_due(&self, now: Instant) -> bool {
+        self.silent_probes >= UI_HANG_MIN_SILENT_PROBES
+            && now.duration_since(self.since) >= hang_recovery_delay(self.streak)
+    }
+}
+
+/// Back-to-back hang relaunches leading up to this process, read from the
+/// variables its parent set when relaunching it. A process that has been
+/// running past HANG_STREAK_WINDOW_SECS starts a fresh streak.
+fn hang_relaunch_streak(
+    hang_relaunches: Option<&str>,
+    last_relaunch_unix: Option<&str>,
+    now_unix: u64,
+) -> u32 {
+    let started = last_relaunch_unix
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    if started == 0 || now_unix.saturating_sub(started) >= HANG_STREAK_WINDOW_SECS {
+        return 0;
+    }
+    hang_relaunches
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Silence tolerated before a relaunch, doubled for each back-to-back hang.
+fn hang_recovery_delay(streak: u32) -> Duration {
+    Duration::from_secs(UI_HANG_RECOVERY_SECS << streak.min(HANG_BACKOFF_MAX_DOUBLINGS))
 }
 
 /// Detect explorer.exe restarts and recover from them.
@@ -655,7 +888,8 @@ fn poll_display_state(
         && data.is_some_and(|data| data.iter().any(|(_, usage)| usage.stale));
     (
         last_poll_ok || has_usable_stale_data,
-        retry_count > 0 && !has_usable_stale_data,
+        // A partial-failure retry after an overall success is not an error.
+        !last_poll_ok && retry_count > 0 && !has_usable_stale_data,
     )
 }
 
@@ -2261,6 +2495,7 @@ pub fn run() {
         }
 
         diagnose::log(format!("main window created hwnd={:?}", hwnd));
+        PRIMARY_HWND.store(SendHwnd::from_hwnd(hwnd).0, Ordering::Relaxed);
 
         let is_dark = theme::is_dark_mode();
         {
@@ -2279,8 +2514,6 @@ pub fn run() {
                 show_antigravity_gemini: settings.antigravity_gemini_enabled(),
                 show_antigravity_external: settings.antigravity_external_enabled(),
                 crossfade_opacity: 1.0,
-                crossfade_anim_start: None,
-                crossfade_target_opacity: 1.0,
                 accounts: settings.accounts.clone(),
                 data: None,
                 poll_interval_ms: settings.poll_interval_ms,
@@ -2347,7 +2580,6 @@ pub fn run() {
         diagnose::log("window shown");
 
         // Initial render using the presenter selected by the surface nest.
-        render_layered();
         schedule_countdown_timer();
         schedule_clock_timer();
         let startup_dual_mode = {
@@ -2361,6 +2593,7 @@ pub fn run() {
         if startup_dual_mode {
             arm_crossfade_schedule(hwnd);
         }
+        render_layered();
 
         if open_dashboard_on_start {
             crate::dashboard::show(hwnd);
@@ -2384,6 +2617,7 @@ pub fn run() {
         // (WM_TIMER included), so a timer would never fire again.
         taskbar_collision::spawn_reader();
         spawn_taskbar_watchdog();
+        spawn_ui_hang_watchdog();
 
         // Initial poll
         if !no_poll {
@@ -2647,6 +2881,44 @@ fn scheduled_poll_needed() -> bool {
         })
 }
 
+fn is_partial_poll_retry_error(error: poller::PollError) -> bool {
+    matches!(
+        error,
+        poller::PollError::NetworkError | poller::PollError::HttpStatus(429 | 500..=599)
+    )
+}
+
+// Successful polls retry only transient account failures, including unselected
+// accounts with carried stale data. Missing or stale readings alone do not
+// establish that a failure is transient.
+fn partial_poll_retry_delay_ms(
+    data: &AppUsageData,
+    enabled: ProviderSet,
+    accounts: &crate::accounts::AccountSettings,
+    retry_count: u32,
+    interval_ms: u32,
+    cooldown_ms: u32,
+) -> Option<u32> {
+    let needs_retry = enabled.iter().any(|provider| {
+        if accounts.get(provider).is_some() {
+            data.accounts.iter().any(|account| {
+                account.provider == provider
+                    && account.profile.enabled
+                    && account.error.is_some_and(is_partial_poll_retry_error)
+                    && account.usage.as_ref().is_none_or(|usage| usage.stale)
+            })
+        } else {
+            // Providers without profiles do not retain their last error.
+            false
+        }
+    });
+    needs_retry.then(|| {
+        let backoff =
+            RETRY_BASE_MS.saturating_mul(1u32.checked_shl(retry_count).unwrap_or(u32::MAX));
+        backoff.min(interval_ms).max(cooldown_ms).min(0x7fff_ffff)
+    })
+}
+
 fn do_poll_once(hwnd: HWND) {
     let poll_started = Instant::now();
     let (enabled_providers, accounts, previous, force) = {
@@ -2732,12 +3004,26 @@ fn do_poll_once(hwnd: HWND) {
                     }
                 }
 
+                let retry_ms = partial_poll_retry_delay_ms(
+                    &data,
+                    enabled_providers,
+                    &accounts,
+                    s.retry_count,
+                    s.poll_interval_ms,
+                    poller::retry_delay_ms(0, poll_started),
+                );
                 s.data = Some(data);
                 s.last_poll_ok = true;
                 s.last_poll_failure = None;
 
-                // Recovered from errors — restore normal poll interval
-                if s.retry_count > 0 {
+                // Retry partial failures; restore the normal interval after recovery.
+                if let Some(retry_ms) = retry_ms {
+                    s.retry_count = s.retry_count.saturating_add(1);
+                    unsafe {
+                        let _ = KillTimer(Some(hwnd), TIMER_RESET_POLL);
+                        SetTimer(Some(hwnd), TIMER_POLL, retry_ms, None);
+                    }
+                } else if s.retry_count > 0 {
                     s.retry_count = 0;
                     let interval = s.poll_interval_ms;
                     unsafe {
@@ -2927,7 +3213,7 @@ fn schedule_countdown_timer() {
     }
 
     // If a reset time has passed, poll every 5s to pick up fresh data
-    if s.data.as_ref().is_some_and(poller::app_is_past_reset) {
+    if s.retry_count == 0 && s.data.as_ref().is_some_and(poller::app_is_past_reset) {
         unsafe {
             SetTimer(Some(hwnd), TIMER_RESET_POLL, 5_000, None);
         }
@@ -3004,25 +3290,43 @@ fn check_language_change() {
     }
 }
 
+/// All widget surfaces use the same wall-clock phase, including after a
+/// settings change or a delayed timer following sleep.
+fn antigravity_crossfade_frame(now_ms: u64) -> (f64, u32) {
+    let phase = now_ms % 20_000;
+    let smooth = |elapsed: u64| {
+        let t = elapsed as f64 / 2_000.0;
+        t * t * (3.0 - 2.0 * t)
+    };
+    match phase {
+        0..8_000 => (1.0, (8_000 - phase) as u32),
+        8_000..10_000 => (1.0 - smooth(phase - 8_000), 30),
+        10_000..18_000 => (0.0, (18_000 - phase) as u32),
+        _ => (smooth(phase - 18_000), 30),
+    }
+}
+
 pub(super) fn arm_crossfade_schedule(hwnd: HWND) {
-    let now_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(d) => d.as_millis() as u64,
-        Err(_) => 0,
-    };
-    let cycle_pos_ms = now_ms % 20_000;
-    // Cycle: [0..8000) Gemini hold, [8000..10000) Fade to External,
-    // [10000..18000) External hold, [18000..20000) Fade to Gemini
-    let delay_ms = if cycle_pos_ms < 8_000 {
-        8_000 - cycle_pos_ms
-    } else if cycle_pos_ms < 10_000 {
-        1
-    } else if cycle_pos_ms < 18_000 {
-        18_000 - cycle_pos_ms
-    } else {
-        1
-    };
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let (opacity, delay_ms) = antigravity_crossfade_frame(now_ms);
+    let mut state = lock_state();
+    let dual_mode = state.as_ref().is_some_and(|state| {
+        state.show_antigravity_gemini
+            && state.show_antigravity_external
+            && state.providers.contains(ProviderId::Antigravity)
+    });
+    if let Some(state) = state.as_mut() {
+        state.crossfade_opacity = if dual_mode { opacity } else { 1.0 };
+    }
     unsafe {
-        let _ = SetTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE, delay_ms as u32, None);
+        if dual_mode {
+            let _ = SetTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE, delay_ms, None);
+        } else {
+            let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
+        }
     }
 }
 
@@ -3060,11 +3364,8 @@ fn reload_external_settings(hwnd: HWND) {
         if !dual_mode {
             unsafe {
                 let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
-                let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_ANIM);
             }
             state.crossfade_opacity = 1.0;
-            state.crossfade_anim_start = None;
-            state.crossfade_target_opacity = 1.0;
         }
         update_configured_placement(
             state,
@@ -3208,6 +3509,331 @@ mod placement_tests;
 
 #[cfg(test)]
 mod layered_window_tests;
+
+#[cfg(test)]
+mod partial_poll_retry_tests {
+    use super::*;
+    use crate::accounts::{AccountProfile, AccountSettings};
+    use crate::models::{AccountUsage, UsageData};
+
+    fn partial_data() -> AppUsageData {
+        let mut data = AppUsageData::from_iter([(ProviderId::Codex, UsageData::default())]);
+        data.accounts.push(AccountUsage {
+            provider: ProviderId::Claude,
+            profile: AccountProfile::default(),
+            source_signature: String::new(),
+            source_path: None,
+            usage: None,
+            error: Some(poller::PollError::HttpStatus(429)),
+            selected: false,
+        });
+        data
+    }
+
+    #[test]
+    fn overall_success_with_failed_account_retries_with_backoff_and_cooldown() {
+        let data = partial_data();
+        assert!(
+            !data.is_empty(),
+            "another provider made the poll successful"
+        );
+        let enabled = ProviderSet::from_enabled([ProviderId::Claude, ProviderId::Codex]);
+        let accounts = AccountSettings::default();
+        for (count, interval, cooldown, expected) in [
+            (0, 900_000, 0, 30_000),
+            (1, 900_000, 0, 60_000),
+            (2, 900_000, 0, 120_000),
+            (10, 900_000, 0, 900_000),
+            (u32::MAX, 900_000, 0, 900_000),
+            (0, 900_000, 120_000, 120_000),
+            (0, 60_000, 120_000, 120_000),
+        ] {
+            assert_eq!(
+                partial_poll_retry_delay_ms(&data, enabled, &accounts, count, interval, cooldown),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn only_transient_account_failures_trigger_partial_retries() {
+        use poller::PollError;
+
+        let mut data = partial_data();
+        let enabled = ProviderSet::from_enabled([ProviderId::Claude, ProviderId::Codex]);
+        let accounts = AccountSettings::default();
+        for (error, expected) in [
+            (PollError::NoCredentials, None),
+            (PollError::AuthRequired, None),
+            (PollError::TokenExpired, None),
+            (PollError::RequestFailed, None),
+            (PollError::UnexpectedResponse, None),
+            (PollError::HttpStatus(400), None),
+            (PollError::HttpStatus(401), None),
+            (PollError::HttpStatus(403), None),
+            (PollError::HttpStatus(404), None),
+            (PollError::HttpStatus(408), None),
+            (PollError::HttpStatus(499), None),
+            (PollError::HttpStatus(600), None),
+            (PollError::HttpStatus(429), Some(30_000)),
+            (PollError::HttpStatus(500), Some(30_000)),
+            (PollError::HttpStatus(503), Some(30_000)),
+            (PollError::HttpStatus(599), Some(30_000)),
+            (PollError::NetworkError, Some(30_000)),
+        ] {
+            data.accounts[0].error = Some(error);
+            assert_eq!(
+                partial_poll_retry_delay_ms(&data, enabled, &accounts, 0, 900_000, 0),
+                expected,
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn permanent_account_failure_does_not_keep_reset_polling_in_backoff() {
+        let mut data = partial_data();
+        data.accounts[0].error = Some(poller::PollError::NoCredentials);
+        let mut healthy = UsageData::default();
+        healthy.session.available = true;
+        healthy.session.resets_at = Some(std::time::UNIX_EPOCH);
+        data.insert(ProviderId::Codex, healthy);
+        let enabled = ProviderSet::from_enabled([ProviderId::Claude, ProviderId::Codex]);
+
+        // None takes the success path that clears retry_count, allowing the
+        // countdown timer to schedule the five-second reset poll again.
+        assert_eq!(
+            partial_poll_retry_delay_ms(&data, enabled, &AccountSettings::default(), 3, 900_000, 0),
+            None
+        );
+        assert!(poller::app_is_past_reset(&data));
+    }
+
+    #[test]
+    fn stale_failed_accounts_retry_and_healthy_accounts_restore_normal_polling() {
+        let mut data = partial_data();
+        let enabled = ProviderSet::from_enabled([ProviderId::Claude, ProviderId::Codex]);
+        let accounts = AccountSettings::default();
+        data.accounts[0].usage = Some(UsageData {
+            stale: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            partial_poll_retry_delay_ms(&data, enabled, &accounts, 1, 900_000, 0),
+            Some(60_000)
+        );
+        data.accounts[0].usage.as_mut().unwrap().stale = false;
+        data.accounts[0].error = None;
+        assert_eq!(
+            partial_poll_retry_delay_ms(&data, enabled, &accounts, 1, 900_000, 120_000),
+            None
+        );
+    }
+
+    #[test]
+    fn disabled_accounts_and_providers_do_not_trigger_retries() {
+        let mut data = partial_data();
+        let accounts = AccountSettings::default();
+        assert_eq!(
+            partial_poll_retry_delay_ms(
+                &data,
+                ProviderSet::from_enabled([ProviderId::Codex]),
+                &accounts,
+                0,
+                900_000,
+                0,
+            ),
+            None
+        );
+        data.accounts[0].profile.enabled = false;
+        assert_eq!(
+            partial_poll_retry_delay_ms(
+                &data,
+                ProviderSet::from_enabled([ProviderId::Claude, ProviderId::Codex]),
+                &accounts,
+                0,
+                900_000,
+                0,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn missing_or_stale_provider_without_error_does_not_retry() {
+        let mut data = AppUsageData::from_iter([(ProviderId::Codex, UsageData::default())]);
+        let enabled = ProviderSet::from_enabled([ProviderId::Codex, ProviderId::Cursor]);
+        let accounts = AccountSettings::default();
+        assert_eq!(
+            partial_poll_retry_delay_ms(&data, enabled, &accounts, 0, 900_000, 0),
+            None
+        );
+        data.insert(
+            ProviderId::Cursor,
+            UsageData {
+                stale: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            partial_poll_retry_delay_ms(&data, enabled, &accounts, 1, 900_000, 120_000),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod ui_hang_watchdog_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+
+    #[test]
+    fn recovery_requires_both_the_delay_and_consecutive_probes() {
+        let start = Instant::now();
+        let mut silence = UiSilence::new(start, 0);
+        for seconds in 0..10 {
+            let now = start + Duration::from_secs(seconds * 2);
+            silence.record_probe(now);
+            assert!(!silence.recovery_due(now));
+        }
+        for seconds in 10..=15 {
+            let now = start + Duration::from_secs(seconds * 2);
+            silence.record_probe(now);
+        }
+        assert!(silence.recovery_due(start + Duration::from_secs(30)));
+
+        let mut sparse = UiSilence::new(start, 0);
+        for seconds in [0, 9, 18, 27, 36] {
+            let now = start + Duration::from_secs(seconds);
+            sparse.record_probe(now);
+            assert!(!sparse.recovery_due(now));
+        }
+    }
+
+    #[test]
+    fn sleep_breaks_silence_even_after_many_failed_probes() {
+        let start = Instant::now();
+        let mut silence = UiSilence::new(start, 0);
+        for probe in 0..UI_HANG_MIN_SILENT_PROBES {
+            silence.record_probe(start + Duration::from_secs(u64::from(probe) * 2));
+        }
+        let wake = start + Duration::from_secs(600);
+        silence.record_probe(wake);
+        assert_eq!(silence.silent_probes, 1);
+        assert!(!silence.recovery_due(wake));
+        for probe in 1..=15 {
+            silence.record_probe(wake + Duration::from_secs(probe * 2));
+        }
+        assert!(silence.recovery_due(wake + Duration::from_secs(30)));
+    }
+
+    struct WindowThread {
+        hwnd: SendHwnd,
+        thread_id: u32,
+        release: mpsc::Sender<()>,
+        handle: std::thread::JoinHandle<()>,
+    }
+
+    /// Own a message-only window on a thread of its own. A pumping thread runs
+    /// a message loop until WM_QUIT; a wedged one blocks without ever pumping
+    /// until released, which is how a stuck UI thread looks from outside.
+    fn spawn_window_thread(pumping: bool) -> WindowThread {
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || unsafe {
+            let class = native_interop::wide_str("STATIC");
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                PCWSTR::from_raw(class.as_ptr()),
+                PCWSTR::null(),
+                WINDOW_STYLE::default(),
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_MESSAGE),
+                None,
+                None,
+                None,
+            )
+            .expect("create isolated message-only test window");
+            let ready = (SendHwnd::from_hwnd(hwnd), GetCurrentThreadId());
+            if pumping {
+                // Report ready from inside the loop, so a probe can never land
+                // between the handshake and the first GetMessageW.
+                PostThreadMessageW(ready.1, WM_APP, WPARAM(0), LPARAM(0))
+                    .expect("queue the readiness marker");
+                let mut msg = MSG::default();
+                while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                    if msg.message == WM_APP {
+                        ready_tx.send(ready).expect("hand the test window back");
+                    }
+                    DispatchMessageW(&msg);
+                }
+            } else {
+                ready_tx.send(ready).expect("hand the test window back");
+                let _ = release_rx.recv();
+            }
+            let _ = DestroyWindow(hwnd);
+        });
+        let (hwnd, thread_id) = ready_rx.recv().expect("test window created");
+        WindowThread {
+            hwnd,
+            thread_id,
+            release,
+            handle,
+        }
+    }
+
+    #[test]
+    fn hang_probe_tells_a_pumping_ui_thread_from_a_wedged_one() {
+        let pumping = spawn_window_thread(true);
+        let wedged = spawn_window_thread(false);
+
+        assert!(ui_thread_responds(pumping.hwnd.to_hwnd()));
+        assert!(!ui_thread_responds(wedged.hwnd.to_hwnd()));
+
+        wedged.release.send(()).expect("release the wedged thread");
+        wedged.handle.join().expect("wedged thread exits");
+        unsafe {
+            PostThreadMessageW(pumping.thread_id, WM_QUIT, WPARAM(0), LPARAM(0))
+                .expect("stop the pumping thread");
+        }
+        pumping.handle.join().expect("pumping thread exits");
+    }
+
+    #[test]
+    fn hang_probe_leaves_a_destroyed_window_to_the_surface_watchdog() {
+        let gone = spawn_window_thread(false);
+        let hwnd = gone.hwnd;
+        gone.release.send(()).expect("release the window thread");
+        gone.handle.join().expect("window thread exits");
+
+        assert!(ui_thread_responds(hwnd.to_hwnd()));
+    }
+
+    #[test]
+    fn back_to_back_hang_relaunches_double_the_tolerated_silence() {
+        assert_eq!(hang_recovery_delay(0), Duration::from_secs(30));
+        assert_eq!(hang_recovery_delay(1), Duration::from_secs(60));
+        assert_eq!(hang_recovery_delay(4), Duration::from_secs(480));
+        assert_eq!(hang_recovery_delay(9), Duration::from_secs(480));
+    }
+
+    #[test]
+    fn a_hang_streak_only_carries_over_while_the_replacement_is_fresh() {
+        let now = 1_000_000;
+        let fresh = (now - 60).to_string();
+        let stale = (now - 600).to_string();
+
+        assert_eq!(hang_relaunch_streak(Some("2"), Some(&fresh), now), 2);
+        assert_eq!(hang_relaunch_streak(Some("2"), Some(&stale), now), 0);
+        assert_eq!(hang_relaunch_streak(None, Some(&fresh), now), 0);
+        assert_eq!(hang_relaunch_streak(Some("2"), None, now), 0);
+        assert_eq!(hang_relaunch_streak(Some("garbage"), Some(&fresh), now), 0);
+    }
+}
 
 #[cfg(test)]
 mod language_menu_tests {
@@ -3388,6 +4014,7 @@ mod poll_display_state_tests {
         let stale = cached_usage(true);
 
         assert_eq!(poll_display_state(false, 1, false, None), (false, true));
+        assert_eq!(poll_display_state(true, 1, false, None), (true, false));
         assert_eq!(
             poll_display_state(false, 1, false, Some(&fresh)),
             (false, true)
@@ -3438,5 +4065,30 @@ mod credential_watch_worker_tests {
         });
         assert!(!in_flight.load(Ordering::Acquire));
         assert!(!pending.load(Ordering::Acquire));
+    }
+}
+
+#[cfg(test)]
+mod antigravity_crossfade_tests {
+    use super::antigravity_crossfade_frame;
+
+    #[test]
+    fn pool_crossfade_follows_the_same_phase_after_startup_sleep_and_rearming() {
+        for cycle in [0, 20_000, 180_000] {
+            for (phase, opacity, delay) in [
+                (0, 1.0, 8_000),
+                (7_000, 1.0, 1_000),
+                (8_000, 1.0, 30),
+                (9_000, 0.5, 30),
+                (10_000, 0.0, 8_000),
+                (17_000, 0.0, 1_000),
+                (18_000, 0.0, 30),
+                (19_000, 0.5, 30),
+            ] {
+                assert_eq!(antigravity_crossfade_frame(cycle + phase), (opacity, delay));
+            }
+        }
+        let before_wrap = antigravity_crossfade_frame(19_999).0;
+        assert!((1.0 - before_wrap).abs() < 0.000_001);
     }
 }

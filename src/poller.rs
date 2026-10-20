@@ -103,7 +103,11 @@ pub fn poll(
     {
         accounts::poll_accounts(enabled_providers, settings, previous, force, on_progress)
     } else {
-        poll_concurrently_with_progress(enabled_providers, poll_provider, on_progress)
+        poll_concurrently_with_progress(
+            enabled_providers,
+            |provider| retry_after::with_manual_refresh(force, || poll_provider(provider)),
+            on_progress,
+        )
     }
 }
 
@@ -165,7 +169,7 @@ pub fn carry_forward_failures(
         }
         if let Some(last) = previous.get(provider) {
             let mut carried = last.clone();
-            carried.stale = true;
+            carried.mark_stale();
             merged.insert(provider, carried);
         }
     }
