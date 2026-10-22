@@ -4,6 +4,14 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.20.3] - 2026-10-22
+
+### Fixed
+
+- Pause requests for one minute after HTTP 429 responses without a usable `Retry-After` header, including repeated manual refreshes. Resume requests after the cooldown while keeping other accounts independent. ([#182](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/182))
+- Discover Claude desktop credentials and its bundled Claude Code executable under the migrated `%LOCALAPPDATA%\Claude-Data\claude_*` layout. Prefer migrated credential caches while retaining legacy roaming and Microsoft Store paths, and select the newest available bundled executable.
+- Isolate desktop discovery tests in temporary directories and cover migrated data discovery, bundled executable selection, rate-limit cooldowns, account independence, and recovery.
+
 ## [2.20.2] - 2026-10-20
 
 ### Fixed
@@ -1445,3 +1453,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.20.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.10...v2.20.0
 [2.20.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.0...v2.20.1
 [2.20.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.1...v2.20.2
+[2.20.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.2...v2.20.3

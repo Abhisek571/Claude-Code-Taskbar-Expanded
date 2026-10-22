@@ -13,6 +13,7 @@ use super::HttpResponse;
 // Bound the stored cooldown so a bad header cannot lock out an account.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(15 * 60);
 const MANUAL_RETRY_AFTER: Duration = Duration::from_secs(60);
+const DEFAULT_RATE_LIMIT_DELAY: Duration = Duration::from_secs(60);
 
 thread_local! {
     static MANUAL_REFRESH: Cell<bool> = const { Cell::new(false) };
@@ -144,6 +145,9 @@ impl RetryAfter {
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| parse_retry_after(value, SystemTime::now()))
                 .filter(|delay| !delay.is_zero())
+                // Some rate-limit responses omit Retry-After. Still throttle
+                // manual refreshes, which can bypass the poll retry timer.
+                .or_else(|| (status.as_u16() == 429).then_some(DEFAULT_RATE_LIMIT_DELAY))
             {
                 let received = Instant::now();
                 let mut cooldowns = self.cooldowns.lock().unwrap_or_else(|e| e.into_inner());
@@ -533,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn absent_invalid_and_expired_headers_keep_fallback() {
+    fn rate_limits_without_usable_headers_throttle_automatic_and_manual_refreshes() {
         for header in [
             None,
             Some("invalid"),
@@ -545,13 +549,51 @@ mod tests {
             state
                 .handle(request("first"), |_| Ok(response(429, header)))
                 .unwrap();
+            let key = request_key(&request("first"));
+            let cooldown = state.cooldowns.lock().unwrap()[&key];
+            assert_eq!(cooldown.delay, DEFAULT_RATE_LIMIT_DELAY);
+            assert_eq!(
+                state.retry_delay_ms(30_000, started, cooldown.received),
+                60_000
+            );
+            for manual in [false, true] {
+                assert!(matches!(
+                    with_manual_refresh(manual, || state.handle(request("first"), |_| {
+                        panic!("sent during fallback cooldown")
+                    })),
+                    Err(ureq::Error::StatusCode(429))
+                ));
+            }
+            assert!(state
+                .handle(request("second"), |_| Ok(response(200, None)))
+                .is_ok());
+            state
+                .cooldowns
+                .lock()
+                .unwrap()
+                .get_mut(&key)
+                .unwrap()
+                .received = Instant::now() - DEFAULT_RATE_LIMIT_DELAY;
+            assert!(state
+                .handle(request("first"), |_| Ok(response(200, None)))
+                .is_ok());
+            assert!(state.cooldowns.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn server_errors_without_usable_headers_keep_poll_timer_fallback() {
+        for header in [None, Some("invalid"), Some("0")] {
+            let state = RetryAfter::default();
+            let started = Instant::now();
+            state
+                .handle(request("first"), |_| Ok(response(503, header)))
+                .unwrap();
             assert_eq!(
                 state.retry_delay_ms(30_000, started, Instant::now()),
                 30_000
             );
-            assert!(state
-                .handle(request("first"), |_| Ok(response(200, None)))
-                .is_ok());
+            assert!(state.cooldowns.lock().unwrap().is_empty());
         }
     }
 
