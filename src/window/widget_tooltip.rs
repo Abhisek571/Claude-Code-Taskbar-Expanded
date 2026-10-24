@@ -40,7 +40,7 @@ impl WidgetTooltip {
 impl Drop for WidgetTooltip {
     fn drop(&mut self) {
         unsafe {
-            let _ = KillTimer(Some(self.controller), REFRESH_TIMER);
+            let _ = kill_controller_timer(Some(self.controller), REFRESH_TIMER);
             let _ = DestroyWindow(self.window);
         }
     }
@@ -114,7 +114,7 @@ fn content(owner: HWND) -> Option<(String, bool, HWND)> {
             text
         },
         theme::is_dark_mode(),
-        state.hwnd.to_hwnd(),
+        controller_for(state.hwnd.to_hwnd()),
     ))
 }
 
@@ -184,7 +184,7 @@ pub(super) fn show(owner: HWND) {
             Some(WPARAM(1)),
             Some(LPARAM(&info as *const _ as isize)),
         );
-        SetTimer(Some(controller), REFRESH_TIMER, 1_000, None);
+        set_controller_timer(Some(controller), REFRESH_TIMER, 1_000, None);
         TOOLTIP.with(|slot| *slot.borrow_mut() = Some(tooltip));
     }
 }

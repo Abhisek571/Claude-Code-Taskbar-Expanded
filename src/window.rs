@@ -173,7 +173,7 @@ fn publish_update_status(state: &AppState) {
         UpdateStatus::Applying => DashboardStatus::Applying,
         UpdateStatus::Available(update) => DashboardStatus::Available(update.version().to_owned()),
     };
-    crate::dashboard::publish_update_status(state.hwnd.to_hwnd(), status);
+    crate::dashboard::publish_update_status(controller_for(state.hwnd.to_hwnd()), status);
 }
 
 fn perform_update_action(hwnd: HWND) {
@@ -274,15 +274,14 @@ const HANG_STREAK_WINDOW_SECS: u64 = 600;
 /// Cap on the doubling: 30 s, then 1, 2, 4 and at most 8 minutes.
 const HANG_BACKOFF_MAX_DOUBLINGS: u32 = 4;
 
-/// Main window handle published for the hang watchdog outside of `STATE`.
+/// Stable controller handle published for the hang watchdog outside of `STATE`.
 ///
 /// The hang watchdog has to diagnose a wedged UI thread even when that thread
 /// is wedged while holding the state mutex, so it never takes that lock. Written
 /// once, right after the window is created.
-static PRIMARY_HWND: AtomicIsize = AtomicIsize::new(0);
+static CONTROLLER_HWND: AtomicIsize = AtomicIsize::new(0);
 
-/// Set by the first watchdog that commits to a relaunch, so the surface and hang
-/// watchdogs cannot both spawn a replacement in the same instant.
+/// Prevent duplicate recovery attempts by the UI hang watchdog.
 static RELAUNCH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 static SUPPRESS_TRAY_REPOSITION_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
@@ -344,7 +343,7 @@ fn migrated_theme_placement(legacy: LegacyPlacement) -> (usize, i32) {
     let display_index = taskbars
         .get(legacy.taskbar_index)
         .or_else(|| taskbars.first())
-        .map(|taskbar| unsafe { MonitorFromWindow(taskbar.hwnd, MONITOR_DEFAULTTOPRIMARY) })
+        .and_then(|taskbar| native_interop::monitor_for_taskbar(&taskbars, &displays, taskbar.hwnd))
         .and_then(|monitor| {
             displays
                 .iter()
@@ -406,13 +405,13 @@ pub(crate) fn query_theme_runtime_for_surface(
         .nest
         .resolve(surface.placement.reference.region);
     let host_rect = if matches!(nest, SurfaceNest::Taskbar | SurfaceNest::TrayIcon) {
-        native_interop::find_taskbars()
-            .into_iter()
-            .find(|taskbar| unsafe {
-                MonitorFromWindow(taskbar.hwnd, MONITOR_DEFAULTTOPRIMARY) == display.handle
-            })
-            .map(|taskbar| taskbar.rect)
-            .unwrap_or(display.rect)
+        native_interop::taskbar_for_monitor(
+            &native_interop::find_taskbars(),
+            &displays,
+            display.handle,
+        )
+        .map(|taskbar| taskbar.rect)
+        .unwrap_or(display.rect)
     } else {
         display.rect
     };
@@ -438,31 +437,9 @@ const ENV_RELAUNCH: &str = "CCUM_RELAUNCH";
 /// the child so it can detect a relaunch storm.
 const ENV_LAST_RELAUNCH_UNIX: &str = "CCUM_LAST_RELAUNCH_UNIX";
 
-/// Relaunch the widget as a fresh process after explorer.exe has restarted, or
-/// once its UI thread has stopped answering (see `spawn_ui_hang_watchdog`).
-///
-/// When the shell restarts it destroys our embedded child window outright (the
-/// window is gone, not merely orphaned - `IsWindow` returns false) and leaves
-/// the UI thread parked in `GetMessage` with no window to recreate in place.
-/// Spawning a clean new process - which re-embeds into the freshly created
-/// taskbar - and exiting this one is the robust recovery. The child is flagged
-/// via `ENV_RELAUNCH` so it waits for this instance's single-instance mutex to
-/// be released before taking over (see the guard in `run`).
-fn relaunch_self() {
-    relaunch_self_for(RelaunchCause::ShellRestart);
-}
-
-/// What prompted a relaunch, which decides how the old process steps aside.
-#[derive(Clone, Copy)]
-enum RelaunchCause {
-    /// explorer.exe restarted and took a shell-hosted surface with it.
-    ShellRestart,
-    /// The UI thread stopped answering. `streak` counts the hang relaunches
-    /// that led straight up to this one.
-    UiHang { streak: u32 },
-}
-
-fn relaunch_self_for(cause: RelaunchCause) {
+/// A process restart is reserved for an unresponsive UI thread. Shell-hosted
+/// surface loss is recovered in place by the controller.
+fn relaunch_after_ui_hang(streak: u32) {
     if RELAUNCH_IN_PROGRESS.swap(true, Ordering::AcqRel) {
         return;
     }
@@ -509,22 +486,14 @@ fn relaunch_self_for(cause: RelaunchCause) {
         .env(ENV_RELAUNCH, "1")
         .env(ENV_LAST_RELAUNCH_UNIX, now.to_string())
         .env_remove(ENV_HANG_RELAUNCHES);
-    if let RelaunchCause::UiHang { streak } = cause {
-        command.env(ENV_HANG_RELAUNCHES, streak.saturating_add(1).to_string());
-    }
+    command.env(ENV_HANG_RELAUNCHES, streak.saturating_add(1).to_string());
     match command.spawn() {
         Ok(_) => {
             diagnose::log_recovery("watchdog: relaunched fresh instance, exiting old one");
-            if matches!(cause, RelaunchCause::UiHang { .. }) {
-                // ExitProcess runs DLL detach code after terminating the other
-                // threads, and deadlocks if one of them held a lock that code
-                // needs; with the UI thread wedged in an unknown call, the
-                // state of our threads is exactly what we do not know.
-                // TerminateProcess skips that teardown, and nothing left here
-                // needs it: the log is flushed line by line.
-                unsafe {
-                    let _ = TerminateProcess(GetCurrentProcess(), 0);
-                }
+            // Skip DLL detach on a wedged process: another thread may hold a
+            // lock needed by detach code. Recovery diagnostics are already flushed.
+            unsafe {
+                let _ = TerminateProcess(GetCurrentProcess(), 0);
             }
             std::process::exit(0);
         }
@@ -549,7 +518,7 @@ fn relaunch_self_for(cause: RelaunchCause) {
 /// suspended, and only turned true once a frozen widget had been orphaned.
 fn ui_thread_responds(hwnd: HWND) -> bool {
     unsafe {
-        // A destroyed window belongs to the surface watchdog, not this one;
+        // A missing controller is shutdown, not an unresponsive UI thread;
         // calling it responsive keeps the two verdicts from overlapping.
         if !IsWindow(Some(hwnd)).as_bool() {
             return true;
@@ -587,7 +556,7 @@ fn spawn_ui_hang_watchdog() {
                 silence = None;
                 continue;
             }
-            let primary = SendHwnd(PRIMARY_HWND.load(Ordering::Relaxed)).to_hwnd();
+            let primary = SendHwnd(CONTROLLER_HWND.load(Ordering::Relaxed)).to_hwnd();
             if primary.is_invalid() || ui_thread_responds(primary) {
                 silence = None;
                 continue;
@@ -614,7 +583,7 @@ fn spawn_ui_hang_watchdog() {
                     delay.as_secs()
                 ));
                 silence = None;
-                relaunch_self_for(RelaunchCause::UiHang { streak });
+                relaunch_after_ui_hang(streak);
             }
         }
     });
@@ -679,54 +648,17 @@ fn hang_recovery_delay(streak: u32) -> Duration {
 
 /// Detect explorer.exe restarts and recover from them.
 ///
-/// Explorer owns both taskbar and desktop surface hosts. When it restarts, any
-/// child widget windows are destroyed; if the primary window was hosted there,
-/// the UI message loop is lost as well. A dedicated thread checks all native
-/// surface handles and relaunches after the shell has returned.
+/// Shell recovery is posted to the controller, which recreates missing surfaces
+/// on their owning UI thread without disturbing polling or dashboard state.
 fn spawn_taskbar_watchdog() {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(TASKBAR_WATCH_INTERVAL_SECS));
-        let invalid = {
-            let state = lock_state();
-            let Some(state) = state.as_ref() else {
-                continue;
-            };
-            let shell_hosted = theme_with_placement(state, false)
-                .as_ref()
-                .is_some_and(|theme| {
-                    theme.surfaces.iter().any(|surface| {
-                        matches!(
-                            surface
-                                .placement
-                                .nest
-                                .resolve(surface.placement.reference.region),
-                            SurfaceNest::Taskbar | SurfaceNest::Desktop
-                        )
-                    })
-                });
-            if !shell_hosted {
-                continue;
-            }
-            std::iter::once(state.hwnd)
-                .chain(state.mirror_hwnds.iter().copied())
-                .chain(state.desktop_hwnds.iter().flatten().copied())
-                .any(|window| unsafe {
-                    let hwnd = window.to_hwnd();
-                    if !IsWindow(Some(hwnd)).as_bool() {
-                        return true;
-                    }
-                    // When hosted inside a shell window (like Shell_TrayWnd or Progman),
-                    // Windows does not always destroy cross-process child windows when Explorer restarts.
-                    // If this window has a parent that is now destroyed, flag it as invalid.
-                    match GetParent(hwnd).ok() {
-                        Some(p) if !p.is_invalid() => !IsWindow(Some(p)).as_bool(),
-                        _ => false,
-                    }
-                })
-        };
-        if invalid && !native_interop::find_taskbars().is_empty() {
-            diagnose::log("watchdog: shell-hosted surface was destroyed -> relaunching");
-            relaunch_self();
+        let controller = controller_for(HWND::default());
+        if controller.is_invalid() {
+            return;
+        }
+        unsafe {
+            let _ = PostMessageW(Some(controller), WM_APP_RECONCILE, WPARAM(0), LPARAM(0));
         }
 
         static LAST_WATCHDOG_TRAY_RECT: Mutex<Option<RECT>> = Mutex::new(None);
@@ -734,7 +666,7 @@ fn spawn_taskbar_watchdog() {
             let state = lock_state();
             if let Some(s) = state.as_ref() {
                 let tray_hwnd = s.tray_notify_hwnd.map(|h| h.to_hwnd());
-                let target_hwnd = s.hwnd.to_hwnd();
+                let target_hwnd = controller_for(s.hwnd.to_hwnd());
                 (
                     target_hwnd,
                     tray_hwnd.and_then(native_interop::get_window_rect_safe),
@@ -761,7 +693,8 @@ fn spawn_taskbar_watchdog() {
         }
 
         let collision_action = lock_state().as_ref().and_then(|state| {
-            taskbar_collision_action(state).map(|action| (state.hwnd.to_hwnd(), action))
+            taskbar_collision_action(state)
+                .map(|action| (controller_for(state.hwnd.to_hwnd()), action))
         });
 
         if let Some((target_hwnd, action)) = collision_action {
@@ -997,7 +930,14 @@ fn restored_dock_rect(state: &AppState, taskbar: HWND, taskbar_rect: RECT) -> Op
     let display = displays
         .get(surface.placement.reference.display)
         .or_else(|| displays.first())?;
-    if unsafe { MonitorFromWindow(taskbar, MONITOR_DEFAULTTOPRIMARY) } != display.handle {
+    if native_interop::taskbar_for_monitor(
+        &native_interop::find_taskbars(),
+        &displays,
+        display.handle,
+    )
+    .map(|candidate| candidate.hwnd)
+        != Some(taskbar)
+    {
         return None;
     }
     let runtime = theme_runtime_for_surface(&theme, 0, theme_runtime_from_state(state));
@@ -1057,14 +997,14 @@ fn set_window_state_timer(hwnd: HWND, required: bool) {
     }
     unsafe {
         if required {
-            SetTimer(
+            set_controller_timer(
                 Some(hwnd),
                 TIMER_WINDOW_STATE,
                 WINDOW_STATE_INTERVAL_MS,
                 None,
             );
         } else {
-            let _ = KillTimer(Some(hwnd), TIMER_WINDOW_STATE);
+            let _ = kill_controller_timer(Some(hwnd), TIMER_WINDOW_STATE);
         }
     }
 }
@@ -1356,6 +1296,7 @@ fn tray_icon_tooltip_from_state() -> String {
 }
 
 fn sync_tray_icon(hwnd: HWND) {
+    let hwnd = controller_for(hwnd);
     widget_tooltip::refresh();
     let usage_tooltip = tray_usage_summary_from_state();
     let themed = {
@@ -1503,9 +1444,9 @@ fn schedule_auto_update_check(hwnd: HWND) {
     };
 
     unsafe {
-        let _ = KillTimer(Some(hwnd), TIMER_UPDATE_CHECK);
+        let _ = kill_controller_timer(Some(hwnd), TIMER_UPDATE_CHECK);
         if let Some(delay_ms) = delay_ms {
-            SetTimer(Some(hwnd), TIMER_UPDATE_CHECK, delay_ms.max(1), None);
+            set_controller_timer(Some(hwnd), TIMER_UPDATE_CHECK, delay_ms.max(1), None);
         }
     }
 }
@@ -1593,7 +1534,7 @@ fn update_language_change() -> bool {
 }
 
 fn begin_update_check(hwnd: HWND, interactive: bool) {
-    let send_hwnd = SendHwnd::from_hwnd(hwnd);
+    let send_hwnd = SendHwnd::from_hwnd(controller_for(hwnd));
     let (strings, install_channel) = {
         let mut state = lock_state();
         let Some(app_state) = state.as_mut() else {
@@ -1698,7 +1639,7 @@ fn begin_update_check(hwnd: HWND, interactive: bool) {
 }
 
 fn begin_update_apply(hwnd: HWND, release: ReleaseDescriptor) {
-    let send_hwnd = SendHwnd::from_hwnd(hwnd);
+    let send_hwnd = SendHwnd::from_hwnd(controller_for(hwnd));
     let strings = {
         let mut state = lock_state();
         let Some(app_state) = state.as_mut() else {
@@ -2034,14 +1975,59 @@ fn apply_custom_theme(
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         );
     }
-    sync_custom_mirrors();
+    sync_surface_windows();
     sync_window_state_timer(hwnd);
     schedule_countdown_timer();
     schedule_clock_timer();
     Ok(())
 }
 
-fn sync_custom_mirrors() {
+fn sync_surface_windows() {
+    sync_surface_windows_with(|| unsafe { create_desktop_surface_window() });
+}
+
+fn sync_surface_windows_with(mut create_desktop: impl FnMut() -> HWND) {
+    let primary = lock_state().as_ref().map(|state| state.hwnd.to_hwnd());
+    let Some(primary) = primary else {
+        return;
+    };
+    if !lifecycle::surface_has_class(primary, "ClaudeCodeUsageSurface") {
+        let replacement = unsafe { lifecycle::create_primary_surface() };
+        if replacement.is_invalid() {
+            diagnose::log_recovery("unable to recreate primary surface; will retry");
+            return;
+        }
+        if let Some(state) = lock_state().as_mut() {
+            state.hwnd = SendHwnd::from_hwnd(replacement);
+            state.embedded = false;
+            state.taskbar_hwnd = None;
+            state.tray_notify_hwnd = None;
+            state.dragging = false;
+            state.pending_drag = false;
+            state.auto_ejected = false;
+            state.auto_ejected_for_capacity = false;
+            state.auto_ejected_origin = None;
+            state.auto_ejected_host = None;
+            state.is_snapped = false;
+            state.is_switching_window_style = false;
+            state.pending_mouse_click = None;
+            state.hovered_mouse_layer = None;
+            set_window_title(replacement, state.language.strings());
+        }
+        diagnose::log_recovery(format!("recreated primary surface hwnd={replacement:?}"));
+    }
+    let mirrors = lock_state()
+        .as_ref()
+        .map(|state| state.mirror_hwnds.clone())
+        .unwrap_or_default();
+    for (index, mirror) in mirrors.into_iter().enumerate() {
+        if !lifecycle::surface_has_class(mirror.to_hwnd(), "CCUMThemeMirror") {
+            let replacement = unsafe { create_mirror_window() };
+            if let Some(state) = lock_state().as_mut() {
+                state.mirror_hwnds[index] = SendHwnd::from_hwnd(replacement);
+            }
+        }
+    }
     let (desired_total, desktop_surfaces) = {
         let state = lock_state();
         state
@@ -2082,7 +2068,7 @@ fn sync_custom_mirrors() {
         };
         match remove {
             Some(hwnd) => unsafe {
-                let _ = DestroyWindow(hwnd.to_hwnd());
+                lifecycle::destroy_surface(hwnd.to_hwnd());
             },
             None => break,
         }
@@ -2107,13 +2093,18 @@ fn sync_custom_mirrors() {
         let Some(state) = state.as_mut() else {
             return;
         };
+        let removed = if state.desktop_hwnds.len() > desired_total {
+            state.desktop_hwnds.split_off(desired_total)
+        } else {
+            Vec::new()
+        };
         state.desktop_hwnds.resize_with(desired_total, || None);
-        let removed = state.desktop_hwnds.split_off(desired_total);
         let mut stale = removed.into_iter().flatten().collect::<Vec<_>>();
         for (surface_index, window) in state.desktop_hwnds.iter_mut().enumerate() {
             let wanted = desktop_surfaces.get(surface_index) == Some(&true);
-            let valid =
-                window.is_some_and(|window| unsafe { IsWindow(Some(window.to_hwnd())).as_bool() });
+            let valid = window.is_some_and(|window| {
+                lifecycle::surface_has_class(window.to_hwnd(), "CCUMDesktopSurface")
+            });
             if !wanted || !valid {
                 if let Some(window) = window.take() {
                     stale.push(window);
@@ -2124,7 +2115,11 @@ fn sync_custom_mirrors() {
     };
     for window in stale_desktop_windows {
         unsafe {
-            let _ = DestroyWindow(window.to_hwnd());
+            if lifecycle::surface_has_class(window.to_hwnd(), "CCUMDesktopSurface") {
+                lifecycle::destroy_surface(window.to_hwnd());
+            } else {
+                crate::desktop_compositor::remove(window.to_hwnd());
+            }
         }
     }
     for (surface_index, wanted) in desktop_surfaces.into_iter().enumerate() {
@@ -2138,7 +2133,7 @@ fn sync_custom_mirrors() {
         if !missing {
             continue;
         }
-        let window = unsafe { create_desktop_surface_window() };
+        let window = create_desktop();
         if window.is_invalid() {
             continue;
         }
@@ -2152,7 +2147,7 @@ fn sync_custom_mirrors() {
             *slot = Some(SendHwnd::from_hwnd(window));
         } else {
             unsafe {
-                let _ = DestroyWindow(window);
+                lifecycle::destroy_surface(window);
             }
         }
     }
@@ -2162,6 +2157,10 @@ unsafe fn create_desktop_surface_window() -> HWND {
     let Some(desktop) = native_interop::find_desktop_host() else {
         return HWND::default();
     };
+    create_desktop_surface_window_in(desktop)
+}
+
+unsafe fn create_desktop_surface_window_in(desktop: native_interop::DesktopHost) -> HWND {
     let instance = GetModuleHandleW(PCWSTR::null()).unwrap();
     let class = native_interop::wide_str("CCUMDesktopSurface");
     let title = native_interop::wide_str("");
@@ -2295,8 +2294,7 @@ unsafe extern "system" fn mirror_wnd_proc(
         }
         WM_ERASEBKGND => LRESULT(1),
         WM_DESTROY => {
-            widget_tooltip::hide_for(hwnd);
-            crate::desktop_compositor::remove(hwnd);
+            lifecycle::surface_destroyed(hwnd);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -2336,7 +2334,7 @@ pub fn run() {
 
     // Single-instance guard: silently exit if another instance is running in this session.
     // Use the local namespace so other users' desktop/RDP sessions remain independent.
-    // Exception: when relaunched after an explorer restart (ENV_RELAUNCH set),
+    // Exception: when relaunched after a UI hang (ENV_RELAUNCH set),
     // wait for the previous instance to release the mutex, then take over.
     let is_relaunch = std::env::var(ENV_RELAUNCH).is_ok();
     let mutex_name = native_interop::wide_str(&if allow_multiple {
@@ -2389,7 +2387,7 @@ pub fn run() {
         let wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
-            lpfnWndProc: Some(wnd_proc),
+            lpfnWndProc: Some(lifecycle::controller_wnd_proc),
             hInstance: HINSTANCE(hinstance.0),
             hIcon: large_icon,
             hIconSm: small_icon,
@@ -2491,40 +2489,30 @@ pub fn run() {
 
         refresh_theme_host_geometry();
 
-        // Create as layered popup (will be reparented into taskbar)
+        // Hidden top-level lifetime owner: receives shell broadcasts and is
+        // never parented into Explorer. The public class stays stable for IPC.
         let title = native_interop::wide_str(language.strings().window_title);
-        let initial_runtime = ThemeRuntime::from_providers(settings.enabled_providers())
-            .with_poll_state(false, false)
-            .with_language(language)
-            .with_countdown(settings.usage_countdown);
-        let (initial_width, initial_height) = active_theme
-            .as_ref()
-            .map(|theme| {
-                let initial_runtime = theme_runtime_for_surface(theme, 0, initial_runtime);
-                let (width, height) =
-                    theme_engine::resolve_surface_size(theme, 0, None, initial_runtime);
-                let scale = theme_surface_scale(theme, 0);
-                (
-                    scaled_theme_dimension(width, scale),
-                    scaled_theme_dimension(height, scale),
-                )
-            })
-            .unwrap_or((1, 1));
-        let hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
+        let controller = CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             PCWSTR::from_raw(class_name.as_ptr()),
             PCWSTR::from_raw(title.as_ptr()),
             WS_POPUP,
             0,
             0,
-            initial_width,
-            initial_height,
+            0,
+            0,
             None,
             None,
             Some(HINSTANCE(hinstance.0)),
             None,
         )
-        .unwrap();
+        .expect("create application controller");
+        CONTROLLER_HWND.store(SendHwnd::from_hwnd(controller).0, Ordering::Relaxed);
+        let hwnd = lifecycle::create_primary_surface();
+        if hwnd.is_invalid() {
+            let _ = DestroyWindow(controller);
+            return;
+        }
 
         if !large_icon.is_invalid() {
             let _ = SendMessageW(
@@ -2544,7 +2532,7 @@ pub fn run() {
         }
 
         diagnose::log(format!("main window created hwnd={:?}", hwnd));
-        PRIMARY_HWND.store(SendHwnd::from_hwnd(hwnd).0, Ordering::Relaxed);
+        diagnose::log(format!("controller window created hwnd={controller:?}"));
 
         let is_dark = theme::is_dark_mode();
         {
@@ -2612,11 +2600,11 @@ pub fn run() {
         if let Some(state) = lock_state().as_ref() {
             publish_update_status(state);
         }
-        if let Err(error) = crate::dashboard::start_request_listener(hwnd) {
+        if let Err(error) = crate::dashboard::start_request_listener(controller) {
             diagnose::log_error("dashboard request listener failed", error);
         }
 
-        sync_custom_mirrors();
+        sync_surface_windows();
         native_interop::make_popup(hwnd, false);
 
         // Register the persistent application tray icon.
@@ -2645,7 +2633,7 @@ pub fn run() {
         render_layered();
 
         if open_dashboard_on_start {
-            crate::dashboard::show(hwnd);
+            crate::dashboard::show(controller_for(hwnd));
         }
 
         // Poll timer: 15 minutes
@@ -2656,14 +2644,11 @@ pub fn run() {
                 .map(|s| s.poll_interval_ms)
                 .unwrap_or(POLL_15_MIN)
         };
-        SetTimer(Some(hwnd), TIMER_POLL, initial_poll_ms, None);
+        set_controller_timer(Some(hwnd), TIMER_POLL, initial_poll_ms, None);
         sync_window_state_timer(hwnd);
 
-        // Watch for explorer.exe restarts so we can re-embed and re-add the tray
-        // icon (the shell discards tray registrations when it restarts). This
-        // runs on a dedicated thread, NOT a window timer: once explorer destroys
-        // the taskbar, our embedded child window stops receiving all messages
-        // (WM_TIMER included), so a timer would never fire again.
+        // Sample collision geometry off-thread and ask the stable controller to
+        // reconcile shell-hosted windows every two seconds.
         taskbar_collision::spawn_reader();
         spawn_taskbar_watchdog();
         spawn_ui_hang_watchdog();
@@ -2704,7 +2689,7 @@ pub fn run() {
 /// its nest: DirectComposition for desktop and layered windows elsewhere.
 fn render_layered() {
     refresh_dpi();
-    sync_custom_mirrors();
+    sync_surface_windows();
     let (hwnd_val, active_theme, usage_data, runtime, mirror_hwnds, desktop_hwnds) = {
         let state = lock_state();
         let Some(state) = state.as_ref() else {
@@ -2749,10 +2734,13 @@ fn render_layered() {
                 .get(surface_index)
                 .and_then(|window| *window)
                 .map(SendHwnd::to_hwnd)
-                .unwrap_or(regular_hwnd)
+                .unwrap_or_default()
         } else {
             regular_hwnd
         };
+        if target_hwnd.is_invalid() {
+            continue;
+        }
         if nest == SurfaceNest::TrayIcon {
             unsafe {
                 let _ = ShowWindow(target_hwnd, SW_HIDE);
@@ -2796,7 +2784,10 @@ fn render_layered() {
         );
         positioned.placement.offset_x = placement.offset_x;
         positioned.placement.offset_y = placement.offset_y;
-        position_custom_theme(target_hwnd, &positioned, scale);
+        let hosted = position_custom_theme(target_hwnd, &positioned, scale);
+        if !hosted {
+            continue;
+        }
         if desktop_nested {
             unsafe {
                 let _ = ShowWindow(target_hwnd, SW_SHOWNOACTIVATE);
@@ -2856,7 +2847,7 @@ fn request_poll_inner(hwnd: HWND, queue_if_busy: bool) {
         }
         return;
     }
-    let send_hwnd = SendHwnd::from_hwnd(hwnd);
+    let send_hwnd = SendHwnd::from_hwnd(controller_for(hwnd));
     std::thread::spawn(move || poll_worker(send_hwnd, !queue_if_busy));
 }
 
@@ -3049,7 +3040,7 @@ fn do_poll_once(hwnd: HWND) {
                 // Stop fast-poll if reset data is now fresh
                 if !poller::app_is_past_reset(&data) {
                     unsafe {
-                        let _ = KillTimer(Some(hwnd), TIMER_RESET_POLL);
+                        let _ = kill_controller_timer(Some(hwnd), TIMER_RESET_POLL);
                     }
                 }
 
@@ -3069,14 +3060,14 @@ fn do_poll_once(hwnd: HWND) {
                 if let Some(retry_ms) = retry_ms {
                     s.retry_count = s.retry_count.saturating_add(1);
                     unsafe {
-                        let _ = KillTimer(Some(hwnd), TIMER_RESET_POLL);
-                        SetTimer(Some(hwnd), TIMER_POLL, retry_ms, None);
+                        let _ = kill_controller_timer(Some(hwnd), TIMER_RESET_POLL);
+                        set_controller_timer(Some(hwnd), TIMER_POLL, retry_ms, None);
                     }
                 } else if s.retry_count > 0 {
                     s.retry_count = 0;
                     let interval = s.poll_interval_ms;
                     unsafe {
-                        SetTimer(Some(hwnd), TIMER_POLL, interval, None);
+                        set_controller_timer(Some(hwnd), TIMER_POLL, interval, None);
                     }
                 }
                 s.auth_error_paused_polling = false;
@@ -3178,10 +3169,15 @@ fn do_poll_once(hwnd: HWND) {
                             s.auth_watch_snapshot = watch_snapshot;
                             s.retry_count = s.retry_count.saturating_add(1);
                             unsafe {
-                                let _ = KillTimer(Some(hwnd), TIMER_POLL);
-                                let _ = KillTimer(Some(hwnd), TIMER_RESET_POLL);
-                                let _ = KillTimer(Some(hwnd), TIMER_COUNTDOWN);
-                                SetTimer(Some(hwnd), TIMER_POLL, s.poll_interval_ms, None);
+                                let _ = kill_controller_timer(Some(hwnd), TIMER_POLL);
+                                let _ = kill_controller_timer(Some(hwnd), TIMER_RESET_POLL);
+                                let _ = kill_controller_timer(Some(hwnd), TIMER_COUNTDOWN);
+                                set_controller_timer(
+                                    Some(hwnd),
+                                    TIMER_POLL,
+                                    s.poll_interval_ms,
+                                    None,
+                                );
                             }
                         }
                         _ => {
@@ -3200,8 +3196,8 @@ fn do_poll_once(hwnd: HWND) {
                                 poll_started,
                             );
                             unsafe {
-                                let _ = KillTimer(Some(hwnd), TIMER_RESET_POLL);
-                                SetTimer(Some(hwnd), TIMER_POLL, retry_ms, None);
+                                let _ = kill_controller_timer(Some(hwnd), TIMER_RESET_POLL);
+                                set_controller_timer(Some(hwnd), TIMER_POLL, retry_ms, None);
                             }
                         }
                     }
@@ -3255,8 +3251,8 @@ fn schedule_countdown_timer() {
     let hwnd = s.hwnd.to_hwnd();
     if !s.last_poll_ok {
         unsafe {
-            let _ = KillTimer(Some(hwnd), TIMER_COUNTDOWN);
-            let _ = KillTimer(Some(hwnd), TIMER_RESET_POLL);
+            let _ = kill_controller_timer(Some(hwnd), TIMER_COUNTDOWN);
+            let _ = kill_controller_timer(Some(hwnd), TIMER_RESET_POLL);
         }
         return;
     }
@@ -3264,7 +3260,7 @@ fn schedule_countdown_timer() {
     // If a reset time has passed, poll every 5s to pick up fresh data
     if s.retry_count == 0 && s.data.as_ref().is_some_and(poller::app_is_past_reset) {
         unsafe {
-            SetTimer(Some(hwnd), TIMER_RESET_POLL, 5_000, None);
+            set_controller_timer(Some(hwnd), TIMER_RESET_POLL, 5_000, None);
         }
     }
 
@@ -3281,7 +3277,7 @@ fn schedule_countdown_timer() {
         .max(1000) as u32;
 
     unsafe {
-        SetTimer(Some(hwnd), TIMER_COUNTDOWN, ms, None);
+        set_controller_timer(Some(hwnd), TIMER_COUNTDOWN, ms, None);
     }
 }
 
@@ -3293,13 +3289,13 @@ fn schedule_clock_timer() {
     let hwnd = s.hwnd.to_hwnd();
     let Some(interval) = s.theme_clock_interval else {
         unsafe {
-            let _ = KillTimer(Some(hwnd), TIMER_CLOCK);
+            let _ = kill_controller_timer(Some(hwnd), TIMER_CLOCK);
         }
         return;
     };
     let ms = time_until_next_clock_refresh(interval).as_millis().max(1) as u32;
     unsafe {
-        SetTimer(Some(hwnd), TIMER_CLOCK, ms, None);
+        set_controller_timer(Some(hwnd), TIMER_CLOCK, ms, None);
     }
 }
 
@@ -3372,9 +3368,9 @@ pub(super) fn arm_crossfade_schedule(hwnd: HWND) {
     }
     unsafe {
         if dual_mode {
-            let _ = SetTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE, delay_ms, None);
+            let _ = set_controller_timer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE, delay_ms, None);
         } else {
-            let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
+            let _ = kill_controller_timer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
         }
     }
 }
@@ -3412,7 +3408,7 @@ fn reload_external_settings(hwnd: HWND) {
             && state.providers.contains(ProviderId::Antigravity);
         if !dual_mode {
             unsafe {
-                let _ = KillTimer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
+                let _ = kill_controller_timer(Some(hwnd), TIMER_CROSSFADE_SCHEDULE);
             }
             state.crossfade_opacity = 1.0;
         }
@@ -3431,7 +3427,7 @@ fn reload_external_settings(hwnd: HWND) {
         arm_crossfade_schedule(hwnd);
     }
     unsafe {
-        SetTimer(Some(hwnd), TIMER_POLL, settings.poll_interval_ms, None);
+        set_controller_timer(Some(hwnd), TIMER_POLL, settings.poll_interval_ms, None);
     }
     let _ = apply_custom_theme(hwnd, settings.custom_theme_enabled, theme_path, None);
     if lock_enabled {
@@ -3541,6 +3537,8 @@ fn tray_reposition_is_suppressed() -> bool {
     }
 }
 
+mod lifecycle;
+use lifecycle::{controller_for, kill_controller_timer, set_controller_timer, WM_APP_RECONCILE};
 mod host_geometry;
 mod message_loop;
 use host_geometry::*;

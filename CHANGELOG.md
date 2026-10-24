@@ -4,6 +4,14 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.21.1] - 2026-10-25
+
+### Fixed
+
+- Keep the monitor running when switching Windows accounts, changing display modes, or restarting Explorer. A hidden controller retains timers, tray callbacks, polling results, and the dashboard while missing widget, mirror, and desktop surfaces are recreated in place. Reserve process relaunches for an unresponsive UI thread. ([#175](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/175))
+- Use one taskbar-to-monitor rule across placement, drag docking, settings migration, and host sizing. Prefer the primary taskbar and overlapping secondary taskbars over off-screen stale hosts, while retaining Windows 10 auto-hide fallbacks. Temporarily move the main surface to the primary display and hide duplicates whose display is absent, retaining their saved placement for its return.
+- Keep surfaces hidden when their host is unavailable, and destroy surplus desktop windows when a theme removes them. Add geometry and isolated native-window regressions for host destruction, silent window loss, stable timers and state, and deferred shell callbacks.
+
 ## [2.21.0] - 2026-10-25
 
 ### Added
@@ -1465,3 +1473,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.20.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.1...v2.20.2
 [2.20.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.2...v2.20.3
 [2.21.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.3...v2.21.0
+[2.21.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.0...v2.21.1
