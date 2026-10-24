@@ -14,19 +14,12 @@ use crate::models::{limit_slug, UsageData, UsageLimit, UsageSection};
 const ANTIGRAVITY_CREDENTIAL_TARGET: &str = "gemini:antigravity";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const EXPIRY_SKEW: Duration = Duration::from_secs(60);
-// The server returns the "Gemini 4 Argon" group only for this UA form, and
-// only from the daily endpoint; old CLI versions are rejected.
+// The daily summary returns the "Gemini 4 Argon" group only for the agy CLI
+// form of the UA; "antigravity", "antigravity/cli/0.0.1" and other forms omit it.
 const ANTIGRAVITY_USER_AGENT: &str = "antigravity/cli/1.4.0";
-// The daily endpoint goes first: official agy CLI queries daily-cloudcode-pa,
-// which returns accurate quota for Gemini, Claude and GPT, and Gemini 4 Argon.
-// Production cloudcode-pa returns static remainingFraction=1.0 and
-// resetTime=now+window for Gemini, but is kept as a fallback and to
-// supplement any groups daily might miss.
-const ANTIGRAVITY_DAILY_ENDPOINT: &str = "https://daily-cloudcode-pa.googleapis.com";
-const ANTIGRAVITY_PRODUCTION_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_ENDPOINTS: &[&str] = &[
-    ANTIGRAVITY_DAILY_ENDPOINT,
-    ANTIGRAVITY_PRODUCTION_ENDPOINT,
+    "https://daily-cloudcode-pa.googleapis.com",
+    "https://cloudcode-pa.googleapis.com",
     "https://daily-cloudcode-pa.sandbox.googleapis.com",
 ];
 
@@ -54,17 +47,17 @@ struct AntigravityLoadResponse {
 }
 
 #[derive(Deserialize)]
-struct AntigravityModelsResponse {
-    models: HashMap<String, AntigravityModelInfo>,
+pub(super) struct AntigravityModelsResponse {
+    pub(super) models: HashMap<String, AntigravityModelInfo>,
 }
 
 #[derive(Deserialize)]
-struct AntigravityModelInfo {
+pub(super) struct AntigravityModelInfo {
     #[serde(rename = "quotaInfo")]
-    quota_info: Option<AntigravityQuotaInfo>,
+    pub(super) quota_info: Option<AntigravityQuotaInfo>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub(super) struct AntigravityQuotaInfo {
     #[serde(rename = "remainingFraction")]
     remaining_fraction: Option<f64>,
@@ -324,32 +317,37 @@ pub(super) fn antigravity_credential_watch_signature() -> String {
 }
 
 pub(super) fn fetch_antigravity_usage(token: &str) -> Result<UsageData, PollError> {
+    select_antigravity_usage(ANTIGRAVITY_ENDPOINTS, |base_url| {
+        fetch_antigravity_usage_from_endpoint(base_url, token)
+    })
+}
+
+pub(super) fn select_antigravity_usage(
+    endpoints: &[&str],
+    mut fetch: impl FnMut(&str) -> Result<(UsageData, AntigravitySource), PollError>,
+) -> Result<UsageData, PollError> {
+    let mut model_fallback: Option<UsageData> = None;
     let mut auth_error = false;
     let mut last_error = PollError::RequestFailed;
 
-    for base_url in ANTIGRAVITY_ENDPOINTS {
-        match fetch_antigravity_usage_from_endpoint(base_url, token) {
-            Ok(mut data) => {
-                if *base_url == ANTIGRAVITY_DAILY_ENDPOINT {
-                    // Daily is the primary endpoint matching official agy CLI.
-                    // Supplement any groups only present in production.
-                    match fetch_antigravity_usage_from_endpoint(
-                        ANTIGRAVITY_PRODUCTION_ENDPOINT,
-                        token,
-                    ) {
-                        Ok(prod) => merge_antigravity_limits(&mut data.limits, prod.limits),
-                        Err(error) => diagnose::log(format!(
-                            "Antigravity production endpoint failed, skipping its extra groups: {error:?}"
-                        )),
-                    }
-                }
-                return Ok(data);
+    for base_url in endpoints {
+        match fetch(base_url) {
+            // A quota summary names every window it has; it is authoritative
+            // for both pools, so later endpoints are neither asked nor merged.
+            Ok((data, AntigravitySource::Summary)) => return Ok(data),
+            // Model quotas do not name their window; keep them only as a last
+            // resort in case no endpoint answers with a summary.
+            Ok((data, AntigravitySource::Models)) => {
+                model_fallback.get_or_insert(data);
             }
             Err(PollError::AuthRequired) => auth_error = true,
             Err(error) => last_error = error,
         }
     }
 
+    if let Some(data) = model_fallback {
+        return Ok(data);
+    }
     if auth_error {
         Err(PollError::AuthRequired)
     } else {
@@ -357,33 +355,70 @@ pub(super) fn fetch_antigravity_usage(token: &str) -> Result<UsageData, PollErro
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AntigravitySource {
+    Summary,
+    Models,
+}
+
 pub(super) fn fetch_antigravity_usage_from_endpoint(
     base_url: &str,
     token: &str,
-) -> Result<UsageData, PollError> {
+) -> Result<(UsageData, AntigravitySource), PollError> {
     let project = fetch_antigravity_project(base_url, token)?;
-    if let Some(project) = project.as_deref() {
+    let summary_result = if let Some(project) = project.as_deref() {
         match fetch_antigravity_quota_summary(base_url, token, project) {
-            Ok(data) => return Ok(data),
+            Ok(data) => Some(data),
             Err(PollError::AuthRequired) => return Err(PollError::AuthRequired),
-            Err(error) => diagnose::log(format!(
-                "Antigravity retrieveUserQuotaSummary failed, falling back to model quota: {error:?}"
-            )),
+            Err(error) => {
+                diagnose::log(format!(
+                    "Antigravity retrieveUserQuotaSummary failed: {error:?}"
+                ));
+                None
+            }
         }
+    } else {
+        None
+    };
+
+    // Per-model quotas do not say which window (5h or weekly) they belong to,
+    // so when the summary answered, both pools are taken from it alone and the
+    // models request is skipped.
+    if let Some(data) = summary_result {
+        return Ok((data, AntigravitySource::Summary));
     }
+    let models_result = fetch_antigravity_models_response(base_url, token, project.as_deref());
 
-    let session = fetch_antigravity_model_quota(base_url, token, project.as_deref())?;
-    let weekly = UsageSection::default();
+    match models_result {
+        Ok(models) => antigravity_usage_from_models(&models)
+            .map(|data| (data, AntigravitySource::Models))
+            .ok_or(PollError::RequestFailed),
+        Err(err) => Err(err),
+    }
+}
 
-    Ok(UsageData {
-        limits: Vec::new(),
-        session,
-        weekly,
-        weekly_label: None,
-        monthly: None,
-        credits: None,
-        stale: false,
+/// Fallback when the quota summary is unavailable: Gemini models only.
+pub(super) fn antigravity_usage_from_models(
+    models: &AntigravityModelsResponse,
+) -> Option<UsageData> {
+    let gemini = best_gemini_model_quota(models);
+    // Claude/GPT model quotas do not say whether they are the 5h or the weekly
+    // window, so the external pool is left as "no limit data" here rather
+    // than guessed.
+    Some(UsageData {
+        session: gemini?,
+        ..Default::default()
     })
+}
+
+pub(super) fn best_gemini_model_quota(models: &AntigravityModelsResponse) -> Option<UsageSection> {
+    best_antigravity_section(models.models.iter().filter_map(|(model, info)| {
+        if !model.starts_with("gemini") {
+            return None;
+        }
+        let quota = info.quota_info.as_ref().cloned()?;
+        antigravity_section_from_quota(quota)
+    }))
 }
 
 pub(super) fn fetch_antigravity_project(
@@ -429,11 +464,11 @@ pub(super) fn fetch_antigravity_project(
     Ok(response.project.filter(|project| !project.is_empty()))
 }
 
-pub(super) fn fetch_antigravity_model_quota(
+pub(super) fn fetch_antigravity_models_response(
     base_url: &str,
     token: &str,
     project: Option<&str>,
-) -> Result<UsageSection, PollError> {
+) -> Result<AntigravityModelsResponse, PollError> {
     let agent = build_agent()?;
     let body = match project {
         Some(project) => serde_json::json!({ "project": project }),
@@ -471,6 +506,17 @@ pub(super) fn fetch_antigravity_model_quota(
             return Err(PollError::RequestFailed);
         }
     };
+
+    Ok(response)
+}
+
+#[allow(dead_code)]
+pub(super) fn fetch_antigravity_model_quota(
+    base_url: &str,
+    token: &str,
+    project: Option<&str>,
+) -> Result<UsageSection, PollError> {
+    let response = fetch_antigravity_models_response(base_url, token, project)?;
 
     best_antigravity_section(response.models.into_iter().filter_map(|(model, info)| {
         let quota = info.quota_info?;
@@ -545,32 +591,74 @@ pub(super) fn antigravity_section_from_summary_bucket(
 pub(super) fn antigravity_usage_from_summary(
     response: AntigravityQuotaSummaryResponse,
 ) -> Option<UsageData> {
+    let mut gemini_usage = None;
+    let mut external_usage = None;
+    let mut has_named_pool = false;
+    let mut other_groups = Vec::new();
+
+    // A summary that returns a group list (even an empty one) answered
+    // authoritatively: no recognised window means "no limit data", not a
+    // failure to be papered over with model quotas or another endpoint.
+    let answered = response.groups.is_some();
     let groups = response.groups.unwrap_or_default();
     let limits = antigravity_limits_from_summary_groups(&groups);
-    let mut primary = None;
-    let mut fallback = None;
-
     for group in groups {
-        let is_gemini = is_antigravity_gemini_summary_group(&group);
+        // Argon has its own pool; it must not stand in for the main Gemini pool.
+        let is_gemini = is_antigravity_gemini_summary_group(&group)
+            && !is_antigravity_separate_gemini_group(&group);
+        let is_external = is_antigravity_external_summary_group(&group);
+        has_named_pool |= is_gemini || is_external;
         let usage = antigravity_usage_from_summary_group(group);
 
-        if is_gemini && usage.is_some() {
-            primary = usage;
-            break;
-        }
-
-        if fallback.is_none() {
-            fallback = usage;
+        if is_gemini {
+            if gemini_usage.is_none() {
+                gemini_usage = usage;
+            }
+        } else if is_external {
+            if external_usage.is_none() {
+                external_usage = usage;
+            }
+        } else if let Some(usage) = usage {
+            other_groups.push(usage);
         }
     }
 
-    let mut usage = primary.or(fallback)?;
+    // An unrecognised group is assigned only when it is the sole group with
+    // quota and no named pool exists; otherwise a position guess could show one
+    // pool's usage under the other's label.
+    if !has_named_pool && other_groups.len() == 1 {
+        gemini_usage = other_groups.pop();
+    }
+
+    let mut usage = if let Some(mut gemini) = gemini_usage {
+        if let Some(external) = external_usage {
+            gemini.external_pool = Some(Box::new(external));
+        }
+        gemini
+    } else if let Some(external) = external_usage {
+        let mut gemini = UsageData::default();
+        gemini.session.available = false;
+        gemini.weekly.available = false;
+        gemini.external_pool = Some(Box::new(external));
+        gemini
+    } else if answered {
+        UsageData::default()
+    } else {
+        return None;
+    };
     usage.limits = limits;
     Some(usage)
 }
 
-// The primary 5h/weekly pair shows only one group; themes need every group
-// (e.g. "Claude and GPT", "Gemini 4 Argon") to show per-group quota.
+pub(super) fn is_antigravity_separate_gemini_group(group: &AntigravityQuotaSummaryGroup) -> bool {
+    group
+        .display_name
+        .as_deref()
+        .is_some_and(|name| name.to_ascii_lowercase().contains("argon"))
+}
+
+// The main and external pools show two groups only; themes need every group
+// (e.g. "Gemini 4 Argon") and every window to show per-group quota.
 pub(super) fn antigravity_limits_from_summary_groups(
     groups: &[AntigravityQuotaSummaryGroup],
 ) -> Vec<UsageLimit> {
@@ -607,14 +695,24 @@ pub(super) fn antigravity_limits_from_summary_groups(
     limits
 }
 
-// Adds the groups only `extra` has; a group both sides know keeps `base`'s buckets.
-pub(super) fn merge_antigravity_limits(base: &mut Vec<UsageLimit>, extra: Vec<UsageLimit>) {
-    let known: Vec<Option<String>> = base.iter().map(|limit| limit.model.clone()).collect();
-    base.extend(
-        extra
-            .into_iter()
-            .filter(|limit| !known.contains(&limit.model)),
-    );
+pub(super) fn is_antigravity_external_summary_group(group: &AntigravityQuotaSummaryGroup) -> bool {
+    group.display_name.as_deref().is_some_and(|name| {
+        let n = name.to_ascii_lowercase();
+        n.contains("claude") || n.contains("gpt") || n.contains("external")
+    }) || group.description.as_deref().is_some_and(|description| {
+        let d = description.to_ascii_lowercase();
+        d.contains("claude") || d.contains("gpt") || d.contains("external")
+    }) || group.buckets.as_ref().is_some_and(|buckets| {
+        buckets.iter().any(|bucket| {
+            bucket.bucket_id.as_deref().is_some_and(|id| {
+                let id = id.to_ascii_lowercase();
+                id.starts_with("claude-") || id.starts_with("gpt-") || id.starts_with("3p-")
+            }) || bucket.display_name.as_deref().is_some_and(|name| {
+                let n = name.to_ascii_lowercase();
+                n.contains("claude") || n.contains("gpt")
+            })
+        })
+    })
 }
 
 pub(super) fn antigravity_usage_from_summary_group(
@@ -710,23 +808,6 @@ mod auth_tests {
             refresh_token: Some("refresh".into()),
             expiry: expiry.map(str::to_owned),
         }
-    }
-
-    #[test]
-    fn daily_endpoint_is_tried_before_production() {
-        assert_eq!(
-            ANTIGRAVITY_ENDPOINTS.first(),
-            Some(&"https://daily-cloudcode-pa.googleapis.com")
-        );
-    }
-
-    #[test]
-    fn user_agent_uses_the_cli_form_that_unlocks_argon() {
-        assert!(ANTIGRAVITY_USER_AGENT.starts_with("antigravity/cli/"));
-        assert_eq!(
-            ANTIGRAVITY_ENDPOINTS.get(1),
-            Some(&ANTIGRAVITY_PRODUCTION_ENDPOINT)
-        );
     }
 
     #[test]
