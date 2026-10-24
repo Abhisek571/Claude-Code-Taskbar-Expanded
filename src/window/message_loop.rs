@@ -36,6 +36,10 @@ pub(super) unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_MOUSEHOVER => {
+            widget_tooltip::show(hwnd);
+            LRESULT(0)
+        }
         WM_NCHITTEST => LRESULT(HTCLIENT as isize),
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
@@ -121,6 +125,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                 TIMER_TRAY_HOVER => {
                     clear_tray_mouse_hover_if_left(hwnd);
                 }
+                widget_tooltip::REFRESH_TIMER => widget_tooltip::refresh(),
                 TIMER_TRAY_REPOSITION => {
                     let _ = KillTimer(Some(hwnd), TIMER_TRAY_REPOSITION);
                     refresh_theme_host_geometry();
@@ -196,6 +201,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
         WM_SETCURSOR if set_surface_cursor(hwnd) => LRESULT(1),
         WM_SETCURSOR => DefWindowProcW(hwnd, msg, wparam, lparam),
         WM_LBUTTONDOWN => {
+            widget_tooltip::hide();
             unsafe {
                 let _ = SetCapture(hwnd);
             }
@@ -384,12 +390,14 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_LBUTTONDBLCLK => {
+            widget_tooltip::hide();
             if let Some((surface, object)) = mouse_target_at(hwnd, lparam) {
                 dispatch_double_click(hwnd, surface, object);
             }
             LRESULT(0)
         }
         WM_RBUTTONUP => {
+            widget_tooltip::hide();
             if let Some((surface, object)) = mouse_target_at(hwnd, lparam) {
                 let _ = dispatch_mouse_event(surface, &object, MouseEventKind::RightClick);
             }
@@ -1009,6 +1017,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            widget_tooltip::hide();
             crate::dashboard::close_existing();
             crate::desktop_compositor::clear();
             let (hook, desktop_windows) = {

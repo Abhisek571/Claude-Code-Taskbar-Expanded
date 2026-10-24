@@ -194,9 +194,13 @@ pub(super) fn update_mouse_hover(hwnd: HWND, lparam: LPARAM) {
     unsafe {
         let mut tracking = TRACKMOUSEEVENT {
             cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-            dwFlags: TME_LEAVE,
+            dwFlags: if widget_tooltip::visible_for(hwnd) {
+                TME_LEAVE
+            } else {
+                TME_LEAVE | TME_HOVER
+            },
             hwndTrack: hwnd,
-            dwHoverTime: 0,
+            dwHoverTime: HOVER_DEFAULT,
         };
         let _ = TrackMouseEvent(&mut tracking);
     }
@@ -226,6 +230,7 @@ pub(super) fn update_mouse_hover(hwnd: HWND, lparam: LPARAM) {
 }
 
 pub(super) fn clear_mouse_hover(hwnd: HWND) {
+    widget_tooltip::hide_for(hwnd);
     let previous = {
         let mut state = lock_state();
         let Some(state) = state.as_mut() else {

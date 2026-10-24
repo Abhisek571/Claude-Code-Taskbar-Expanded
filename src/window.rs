@@ -15,10 +15,11 @@ use windows::Win32::System::Threading::{
     CreateMutexW, GetCurrentProcess, TerminateProcess, WaitForSingleObject,
 };
 use windows::Win32::UI::Accessibility::HWINEVENTHOOK;
-use windows::Win32::UI::Controls::WM_MOUSELEAVE;
+use windows::Win32::UI::Controls::{HOVER_DEFAULT, WM_MOUSEHOVER, WM_MOUSELEAVE};
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+    GetDoubleClickTime, ReleaseCapture, SetCapture, TrackMouseEvent, TME_HOVER, TME_LEAVE,
+    TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -1144,6 +1145,26 @@ fn tray_usage_summary_lines_with_pools(
     show_antigravity_gemini: bool,
     show_antigravity_external: bool,
 ) -> Vec<String> {
+    usage_summary_lines(
+        data,
+        providers,
+        language,
+        countdown,
+        show_antigravity_gemini,
+        show_antigravity_external,
+        None,
+    )
+}
+
+fn usage_summary_lines(
+    data: &AppUsageData,
+    providers: ProviderSet,
+    language: LanguageId,
+    countdown: bool,
+    show_antigravity_gemini: bool,
+    show_antigravity_external: bool,
+    detailed_at: Option<SystemTime>,
+) -> Vec<String> {
     let strings = language.strings();
     let shown = |percentage: f64| {
         if countdown {
@@ -1154,7 +1175,18 @@ fn tray_usage_summary_lines_with_pools(
     };
     let window_text = |section: &crate::models::UsageSection| {
         if section.available {
-            format!("{:.0}%", shown(section.percentage))
+            if let Some(now) = detailed_at {
+                let percentage = format!("{:.1}%", shown(section.percentage));
+                match section.resets_at {
+                    Some(reset) => format!(
+                        "{percentage} ({})",
+                        widget_tooltip::reset_countdown(reset, now, &strings)
+                    ),
+                    None => percentage,
+                }
+            } else {
+                format!("{:.0}%", shown(section.percentage))
+            }
         } else {
             "--".to_string()
         }
@@ -1221,15 +1253,23 @@ fn tray_usage_summary_lines_with_pools(
                 .as_deref()
                 .unwrap_or(strings.weekly_window);
             lines.push(format!(
-                "{} {}: {:.0}% | {}: {:.0}%",
+                "{} {}: {} | {}: {}",
                 match data.selected_account_name(provider) {
                     Some(name) => format!("{} ({name})", language.text(descriptor.display_name)),
                     None => language.text(descriptor.display_name).to_string(),
                 },
                 strings.session_window,
-                shown(usage.session.percentage),
+                if detailed_at.is_some() {
+                    window_text(&usage.session)
+                } else {
+                    format!("{:.0}%", shown(usage.session.percentage))
+                },
                 weekly_label,
-                shown(usage.weekly.percentage),
+                if detailed_at.is_some() {
+                    window_text(&usage.weekly)
+                } else {
+                    format!("{:.0}%", shown(usage.weekly.percentage))
+                },
             ));
         }
     }
@@ -1316,6 +1356,7 @@ fn tray_icon_tooltip_from_state() -> String {
 }
 
 fn sync_tray_icon(hwnd: HWND) {
+    widget_tooltip::refresh();
     let usage_tooltip = tray_usage_summary_from_state();
     let themed = {
         let state = lock_state();
@@ -2207,11 +2248,16 @@ unsafe extern "system" fn mirror_wnd_proc(
             update_mouse_hover(hwnd, lparam);
             LRESULT(0)
         }
+        WM_MOUSEHOVER => {
+            widget_tooltip::show(hwnd);
+            LRESULT(0)
+        }
         WM_MOUSELEAVE => {
             clear_mouse_hover(hwnd);
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            widget_tooltip::hide();
             let suppressed = {
                 let mut state = lock_state();
                 state.as_mut().is_some_and(|state| {
@@ -2228,12 +2274,14 @@ unsafe extern "system" fn mirror_wnd_proc(
             LRESULT(0)
         }
         WM_LBUTTONDBLCLK => {
+            widget_tooltip::hide();
             if let Some((surface, object)) = mouse_target_at(hwnd, lparam) {
                 dispatch_double_click(hwnd, surface, object);
             }
             LRESULT(0)
         }
         WM_RBUTTONUP => {
+            widget_tooltip::hide();
             if let Some((surface, object)) = mouse_target_at(hwnd, lparam) {
                 let _ = dispatch_mouse_event(surface, &object, MouseEventKind::RightClick);
             }
@@ -2247,6 +2295,7 @@ unsafe extern "system" fn mirror_wnd_proc(
         }
         WM_ERASEBKGND => LRESULT(1),
         WM_DESTROY => {
+            widget_tooltip::hide_for(hwnd);
             crate::desktop_compositor::remove(hwnd);
             LRESULT(0)
         }
@@ -3500,6 +3549,7 @@ mod positioning;
 mod taskbar_collision;
 use positioning::*;
 mod mouse;
+mod widget_tooltip;
 use mouse::*;
 mod window_context_menu;
 use window_context_menu::*;
@@ -3946,6 +3996,87 @@ mod tray_usage_summary_tests {
             ),
             ["Claude Code 5h: 5% | 7d: 42%"]
         );
+    }
+
+    #[test]
+    fn widget_summary_adds_precision_and_reset_times_without_changing_tray_text() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let mut reading = usage(4.64, 42.37, Some("30d"));
+        reading.session.resets_at = Some(now + Duration::from_secs(11_520));
+        reading.weekly.resets_at = Some(now + Duration::from_secs(183_600));
+        let data = [(ProviderId::Claude, reading)].into_iter().collect();
+        let providers = ProviderSet::from_enabled([ProviderId::Claude]);
+        assert_eq!(
+            usage_summary_lines(
+                &data,
+                providers,
+                LanguageId::English,
+                false,
+                true,
+                true,
+                Some(now)
+            ),
+            ["Claude Code 5h: 4.6% (3h 12m) | 30d: 42.4% (2d 3h)"]
+        );
+        assert_eq!(
+            usage_summary_lines(
+                &data,
+                providers,
+                LanguageId::English,
+                true,
+                true,
+                true,
+                Some(now)
+            ),
+            ["Claude Code 5h: 95.4% (3h 12m) | 30d: 57.6% (2d 3h)"]
+        );
+        assert_eq!(
+            tray_usage_summary_lines(&data, providers, LanguageId::English, false),
+            ["Claude Code 5h: 5% | 30d: 42%"]
+        );
+    }
+
+    #[test]
+    fn widget_summary_preserves_pool_selection_and_missing_windows() {
+        let now = UNIX_EPOCH;
+        let mut reading = usage(12.34, 56.78, None);
+        reading.weekly = UsageSection::default();
+        let data = [(ProviderId::Antigravity, reading)].into_iter().collect();
+        let providers = ProviderSet::from_enabled([ProviderId::Antigravity]);
+        let lines = usage_summary_lines(
+            &data,
+            providers,
+            LanguageId::English,
+            false,
+            true,
+            true,
+            Some(now),
+        );
+        assert!(
+            lines[0].ends_with("(Gemini) 5h: 12.3% | 7d: --"),
+            "{lines:?}"
+        );
+        assert!(lines[1].ends_with("(Claude/GPT): --"), "{lines:?}");
+        assert!(usage_summary_lines(
+            &data,
+            providers,
+            LanguageId::English,
+            false,
+            false,
+            false,
+            Some(now)
+        )
+        .is_empty());
+        assert!(usage_summary_lines(
+            &data,
+            ProviderSet::from_enabled([ProviderId::Claude]),
+            LanguageId::English,
+            false,
+            true,
+            true,
+            Some(now)
+        )
+        .is_empty());
     }
 
     #[test]

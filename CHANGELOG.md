@@ -4,6 +4,16 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.21.0] - 2026-10-25
+
+### Added
+
+- Show an Explorer-style hover popup on the default Classic widget in light and dark modes. Include the tray summary's selected providers, accounts, quota pools, and errors, with usage percentages to one decimal place and reset countdowns in days/hours or hours/minutes. Refresh the popup while visible and dismiss it when leaving, clicking, or dragging the widget.
+
+### Fixed
+
+- Update the transitive `clipboard-win` dependency from yanked 5.4.1 to 5.4.3 so the release dependency gate passes, retaining native text copy/paste through `arboard` and `egui-winit`.
+
 ## [2.20.3] - 2026-10-22
 
 ### Fixed
@@ -1454,3 +1464,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.20.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.0...v2.20.1
 [2.20.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.1...v2.20.2
 [2.20.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.2...v2.20.3
+[2.21.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.3...v2.21.0
