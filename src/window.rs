@@ -4142,6 +4142,18 @@ mod tray_usage_summary_tests {
             ),
             ["Cursor 7d: 7% | API: 0%"]
         );
+        assert_eq!(
+            usage_summary_lines(
+                &data,
+                ProviderSet::from_enabled([ProviderId::Cursor]),
+                LanguageId::English,
+                false,
+                true,
+                true,
+                Some(UNIX_EPOCH),
+            ),
+            ["Cursor 7d: 7.1% | API: 0.0%"]
+        );
     }
 }
 

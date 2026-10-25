@@ -4,6 +4,14 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.21.2] - 2026-10-25
+
+### Fixed
+
+- Prefer Cursor's current-period usage endpoint over the dashboard summary, which can report zero usage for a stale monthly period. Read bearer credentials from the existing local login or session-token environment setting, and retain the dashboard fallback when the internal endpoint is unavailable, disabled, or has no usable percentages. ([#186](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/186), [#190](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/190))
+- Derive Cursor's session label and reset from the reported billing bounds so a seven-day allowance displays `7d` in tray and hover summaries. Preserve the optional label in cached usage and expose it to themes as `{provider}.session.label`, with localized defaults for other providers.
+- Reject non-finite percentage strings, handle invalid timestamps without panicking, and preserve retryable dashboard errors when the optional internal endpoint rejects a login. Add regression coverage for fallback selection, idle versus missing usage, cache compatibility, and localized labels.
+
 ## [2.21.1] - 2026-10-25
 
 ### Fixed
@@ -1474,3 +1482,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.20.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.2...v2.20.3
 [2.21.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.3...v2.21.0
 [2.21.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.0...v2.21.1
+[2.21.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.1...v2.21.2

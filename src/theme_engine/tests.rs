@@ -1078,6 +1078,13 @@ fn provider_specific_session_window_labels_are_available_to_templates() {
     let context = DataContext::from_usage(Some(&usage), &Canvas::default());
     assert_eq!(format_template("{cursor.session.label}", &context), "7d");
     assert_eq!(format_template("{claude.session.label}", &context), "5h");
+    let localized = DataContext::from_usage_with_runtime(
+        Some(&usage),
+        &Canvas::default(),
+        ThemeRuntime::default().with_language(LanguageId::from_code("nl").unwrap()),
+    );
+    assert_eq!(format_template("{cursor.session.label}", &localized), "7d");
+    assert_eq!(format_template("{claude.session.label}", &localized), "5u");
 }
 
 #[test]

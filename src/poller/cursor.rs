@@ -10,9 +10,8 @@ use crate::diagnose;
 use crate::models::{UsageData, UsageSection};
 
 const CURSOR_USAGE_SUMMARY_URL: &str = "https://cursor.com/api/usage-summary";
-/// Cursor's own client reads the allowance it displays from this internal
-/// application service. The dashboard summary above can describe a different
-/// (stale) period for the same account, so prefer this endpoint and fall back.
+/// This internal application service can report the current allowance while
+/// the dashboard summary describes a stale period for the same account.
 const CURSOR_CURRENT_PERIOD_URL: &str =
     "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
 const CURSOR_SESSION_TOKEN_ENV: &str = "CURSOR_SESSION_TOKEN";
@@ -238,25 +237,29 @@ fn query_cursor_access_token(path: &Path) -> Result<Option<String>, crate::winsq
 }
 
 fn fetch_cursor_usage(auth: &CursorAuth) -> Result<UsageData, PollError> {
+    fetch_cursor_usage_with(
+        || fetch_cursor_usage_current_period(auth),
+        || fetch_cursor_usage_summary(&auth.cookie),
+    )
+}
+
+fn fetch_cursor_usage_with(
+    current_period: impl FnOnce() -> Result<UsageData, PollError>,
+    summary: impl FnOnce() -> Result<UsageData, PollError>,
+) -> Result<UsageData, PollError> {
     // Prefer the application service window: it matches the allowance Cursor
     // itself displays. The dashboard summary is kept as a fallback because the
     // application service is internal and may reject some accounts.
-    match fetch_cursor_usage_current_period(auth) {
+    match current_period() {
         Ok(data) => Ok(data),
         Err(current_error) => {
             diagnose::log(format!(
                 "Cursor GetCurrentPeriodUsage unavailable; falling back to usage-summary ({current_error:?})"
             ));
-            match fetch_cursor_usage_summary(&auth.cookie) {
-                Ok(data) => Ok(data),
-                Err(summary_error) => {
-                    if current_error.is_auth() || summary_error.is_auth() {
-                        Err(PollError::AuthRequired)
-                    } else {
-                        Err(summary_error)
-                    }
-                }
-            }
+            // Rejection by the optional internal service does not prove the
+            // dashboard credentials are invalid. Preserve the fallback error
+            // so temporary summary outages still retry normally.
+            summary()
         }
     }
 }
@@ -337,6 +340,12 @@ fn cursor_usage_from_current_period(value: &serde_json::Value) -> Option<UsageDa
         .or_else(|| value.get("plan"))
         .or_else(|| value.pointer("/individualUsage/plan"))?;
     let plan: CursorPlanUsage = serde_json::from_value(plan_value.clone()).ok()?;
+    if plan.auto_percent_used.is_none()
+        && plan.api_percent_used.is_none()
+        && plan.total_percent_used.is_none()
+    {
+        return None;
+    }
     let start_ms = epoch_millis_from_value(value.get("billingCycleStart"));
     let end_ms = epoch_millis_from_value(value.get("billingCycleEnd"));
     cursor_usage_from_plan(
@@ -406,7 +415,7 @@ fn epoch_millis_to_system_time(millis: Option<i64>) -> Option<SystemTime> {
     if millis < 0 {
         return None;
     }
-    Some(UNIX_EPOCH + Duration::from_millis(millis as u64))
+    UNIX_EPOCH.checked_add(Duration::from_millis(millis as u64))
 }
 
 fn epoch_millis_from_value(value: Option<&serde_json::Value>) -> Option<i64> {
@@ -422,11 +431,13 @@ where
     D: Deserializer<'de>,
 {
     let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(value.and_then(|value| match value {
-        serde_json::Value::Number(number) => number.as_f64(),
-        serde_json::Value::String(text) => text.parse().ok(),
-        _ => None,
-    }))
+    Ok(value
+        .and_then(|value| match value {
+            serde_json::Value::Number(number) => number.as_f64(),
+            serde_json::Value::String(text) => text.parse().ok(),
+            _ => None,
+        })
+        .filter(|number| number.is_finite()))
 }
 
 fn non_empty_environment(name: &str) -> Option<String> {
@@ -565,6 +576,10 @@ mod tests {
         for json in [
             r#"{"enabled": false, "planUsage": {"autoPercentUsed": 7}}"#,
             r#"{"enabled": true, "billingCycleEnd": "1793010260651"}"#,
+            r#"{"planUsage": {}}"#,
+            r#"{"planUsage": {"autoPercentUsed": null}}"#,
+            r#"{"planUsage": {"autoPercentUsed": "NaN", "apiPercentUsed": "inf"}}"#,
+            r#"{"planUsage": {"autoPercentUsed": "invalid", "apiPercentUsed": false}}"#,
             r#"{}"#,
         ] {
             let value: serde_json::Value = serde_json::from_str(json).unwrap();
@@ -590,6 +605,63 @@ mod tests {
         assert_eq!(data.weekly.percentage, 2.0);
         // 18000 seconds is a five-hour session window.
         assert_eq!(data.session_label.as_deref(), Some("5h"));
+    }
+
+    #[test]
+    fn current_period_invalid_auto_percentage_uses_finite_total() {
+        let value = serde_json::json!({
+            "planUsage": {"autoPercentUsed": "NaN", "totalPercentUsed": "7.1"}
+        });
+        let data = cursor_usage_from_current_period(&value).unwrap();
+        assert_eq!(data.session.percentage, 7.1);
+        assert!(!data.weekly.available);
+    }
+
+    #[test]
+    fn current_period_success_skips_summary_and_empty_plan_falls_back() {
+        let data = cursor_usage_from_current_period(&serde_json::json!({
+            "planUsage": {"autoPercentUsed": 0, "apiPercentUsed": 0}
+        }))
+        .unwrap();
+        assert_eq!(
+            fetch_cursor_usage_with(|| Ok(data.clone()), || panic!("unexpected fallback")),
+            Ok(data.clone())
+        );
+        assert_eq!(
+            fetch_cursor_usage_with(
+                || cursor_usage_from_current_period(&serde_json::json!({"planUsage": {}}))
+                    .ok_or(PollError::UnexpectedResponse),
+                || Ok(data.clone()),
+            ),
+            Ok(data)
+        );
+    }
+
+    #[test]
+    fn internal_endpoint_rejection_keeps_summary_retry_and_auth_semantics() {
+        for summary_error in [
+            PollError::RequestFailed,
+            PollError::HttpStatus(429),
+            PollError::AuthRequired,
+        ] {
+            assert_eq!(
+                fetch_cursor_usage_with(|| Err(PollError::AuthRequired), || Err(summary_error),),
+                Err(summary_error)
+            );
+        }
+        assert!(fetch_cursor_usage_with(
+            || Err(PollError::AuthRequired),
+            || Ok(UsageData::default()),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn invalid_epoch_millis_do_not_panic() {
+        assert!(epoch_millis_to_system_time(Some(-1)).is_none());
+        let _ = epoch_millis_to_system_time(Some(i64::MAX));
+        assert!(epoch_millis_from_value(Some(&serde_json::json!(u64::MAX))).is_none());
+        assert!(epoch_millis_from_value(Some(&serde_json::json!("invalid"))).is_none());
     }
 
     #[test]

@@ -436,6 +436,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn usage_cache_preserves_session_labels_and_reads_older_caches() {
+        let usage = UsageData {
+            session_label: Some("7d".into()),
+            ..Default::default()
+        };
+        let mut json = serde_json::to_value(&usage).unwrap();
+        assert_eq!(json["session_label"], "7d");
+        assert_eq!(
+            serde_json::from_value::<UsageData>(json.clone()).unwrap(),
+            usage
+        );
+        json.as_object_mut().unwrap().remove("session_label");
+        let legacy: UsageData = serde_json::from_value(json).unwrap();
+        assert!(legacy.session_label.is_none());
+    }
+
+    #[test]
     fn default_claude_cache_keeps_poll_results_until_source_changes() {
         let provider = ProviderId::Claude;
         let path = crate::accounts::default_credential_path(provider).unwrap();
