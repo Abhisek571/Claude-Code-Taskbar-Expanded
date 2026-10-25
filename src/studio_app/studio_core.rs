@@ -29,6 +29,11 @@ impl StudioApp {
             .with_poll_state(self.usage_poll_ok, self.usage_has_error)
             .with_language(language)
             .with_countdown(self.settings.usage_countdown)
+            .with_antigravity_pools(
+                self.settings.antigravity_gemini_enabled(),
+                self.settings.antigravity_external_enabled(),
+                1.0,
+            )
     }
 
     pub(super) fn theme_runtime_for_surface(&self, surface_index: usize) -> ThemeRuntime {
@@ -171,16 +176,7 @@ impl StudioApp {
     }
 
     pub(super) fn notify_owner(&self) {
-        if self.owner != 0 {
-            unsafe {
-                let _ = PostMessageW(
-                    Some(HWND(self.owner as *mut _)),
-                    WM_APP_SETTINGS_UPDATED,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
-            }
-        }
+        let _ = studio_diagnostics::send_owner_message(self.owner, WM_APP_SETTINGS_UPDATED);
     }
 
     pub(super) fn request_refresh(&mut self) {
@@ -829,6 +825,9 @@ impl StudioApp {
         }
         let now = Instant::now();
         self.last_cache_read = now;
+        if let Some(owner) = crate::dashboard::resolve_monitor_owner(self.owner) {
+            self.owner = owner;
+        }
         self.update_status = crate::dashboard::read_update_status(self.owner);
         let persisted = app_settings::load_settings();
         self.sync_poll_interval(persisted.poll_interval_ms);

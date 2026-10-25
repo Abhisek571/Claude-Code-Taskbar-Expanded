@@ -4,6 +4,145 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.22.1] - 2026-10-25
+
+### Fixed
+
+- Upgrade `ureq` to 3.5.0, which includes the [upstream connector feature fix](https://github.com/algesten/ureq/pull/1204), and enable `native-tls-no-default`. Remove `webpki-root-certs` from the resolved dependencies and its unused license allowance while retaining Windows certificate-store verification for polling and update downloads. ([#111](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/111))
+- Retain local TLS handshake regression checks for both production agents and add opt-in HTTPS checks for a valid certificate and rejection of self-signed, expired, and mismatched-host certificates. Document how to rerun them after TLS dependency changes.
+
+### Changed
+
+- Reduce the local Windows release executable from 7,659,008 bytes (v2.22.0) to 7,536,640 bytes, a decrease of 122,368 bytes (1.6%).
+
+## [2.22.0] - 2026-10-25
+
+### Added
+
+- Expose each named Antigravity quota group's reported 5h and weekly windows to themes through `antigravity.limits.<group_slug>_session` and `antigravity.limits.<group_slug>_weekly`, including the independent Gemini 4 Argon pool. Preserve the limits in cached usage. ([#172](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/172), [#173](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/173))
+
+### Fixed
+
+- Send the Antigravity CLI User-Agent needed for the daily summary to include Gemini 4 Argon. Keep the first successful summary authoritative and retain the existing endpoint order.
+- Keep Argon out of the main Gemini headline, including Argon-only summaries and groups identified by description or bucket metadata. Add regression coverage for pool isolation, per-group theme bindings, cache round trips, missing quota values, and reported reset times.
+
+## [2.21.3] - 2026-10-25
+
+### Fixed
+
+- Preserve the taskbar widget's pending hover timer across repeated mouse-move messages so redraws and repositioning cannot indefinitely delay its tooltip. Reuse active Windows tracking and request only missing hover or leave notifications. ([#159](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/159))
+- Add regression coverage for repeated mouse messages, tooltip dismissal, pointer re-entry, switching widget windows, and failed tracking queries.
+
+## [2.21.2] - 2026-10-25
+
+### Fixed
+
+- Prefer Cursor's current-period usage endpoint over the dashboard summary, which can report zero usage for a stale monthly period. Read bearer credentials from the existing local login or session-token environment setting, and retain the dashboard fallback when the internal endpoint is unavailable, disabled, or has no usable percentages. ([#186](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/186), [#190](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/190))
+- Derive Cursor's session label and reset from the reported billing bounds so a seven-day allowance displays `7d` in tray and hover summaries. Preserve the optional label in cached usage and expose it to themes as `{provider}.session.label`, with localized defaults for other providers.
+- Reject non-finite percentage strings, handle invalid timestamps without panicking, and preserve retryable dashboard errors when the optional internal endpoint rejects a login. Add regression coverage for fallback selection, idle versus missing usage, cache compatibility, and localized labels.
+
+## [2.21.1] - 2026-10-25
+
+### Fixed
+
+- Keep the monitor running when switching Windows accounts, changing display modes, or restarting Explorer. A hidden controller retains timers, tray callbacks, polling results, and the dashboard while missing widget, mirror, and desktop surfaces are recreated in place. Reserve process relaunches for an unresponsive UI thread. ([#175](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/175))
+- Use one taskbar-to-monitor rule across placement, drag docking, settings migration, and host sizing. Prefer the primary taskbar and overlapping secondary taskbars over off-screen stale hosts, while retaining Windows 10 auto-hide fallbacks. Temporarily move the main surface to the primary display and hide duplicates whose display is absent, retaining their saved placement for its return.
+- Keep surfaces hidden when their host is unavailable, and destroy surplus desktop windows when a theme removes them. Add geometry and isolated native-window regressions for host destruction, silent window loss, stable timers and state, and deferred shell callbacks.
+
+## [2.21.0] - 2026-10-25
+
+### Added
+
+- Show an Explorer-style hover popup on the default Classic widget in light and dark modes. Include the tray summary's selected providers, accounts, quota pools, and errors, with usage percentages to one decimal place and reset countdowns in days/hours or hours/minutes. Refresh the popup while visible and dismiss it when leaving, clicking, or dragging the widget.
+
+### Fixed
+
+- Update the transitive `clipboard-win` dependency from yanked 5.4.1 to 5.4.3 so the release dependency gate passes, retaining native text copy/paste through `arboard` and `egui-winit`.
+
+## [2.20.3] - 2026-10-22
+
+### Fixed
+
+- Pause requests for one minute after HTTP 429 responses without a usable `Retry-After` header, including repeated manual refreshes. Resume requests after the cooldown while keeping other accounts independent. ([#182](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/182))
+- Discover Claude desktop credentials and its bundled Claude Code executable under the migrated `%LOCALAPPDATA%\Claude-Data\claude_*` layout. Prefer migrated credential caches while retaining legacy roaming and Microsoft Store paths, and select the newest available bundled executable.
+- Isolate desktop discovery tests in temporary directories and cover migrated data discovery, bundled executable selection, rate-limit cooldowns, account independence, and recovery.
+
+## [2.20.2] - 2026-10-20
+
+### Fixed
+
+- Pin English in the shared Theme Studio test app so UI text assertions pass independently of the Windows display language. ([#179](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/179))
+- Update the transitive `webpki-root-certs` dependency from 1.0.9 to 1.0.10 to resolve RUSTSEC-2026-0383 found by the release dependency checks.
+
+## [2.20.1] - 2026-10-20
+
+### Fixed
+
+- Cap provider Retry-After cooldowns at 15 minutes and allow one manual recovery probe per minute after the first minute. Clear the cooldown on success and preserve its original deadline after failed probes, including responses with fresh Retry-After headers and network failures. Keep Claude Messages header probes exempt from cooldowns. ([#180](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/180))
+- Retry transient failures for enabled accounts after a partially successful poll, with exponential backoff that respects cooldowns. Keep successful readings visible and restore normal polling after recovery; permanent credential errors do not trigger these retries.
+- Add regression coverage for cooldown caps, manual probe recovery and throttling, unchanged deadlines after failures, and partial account retries.
+
+### Changed
+
+- Include sanitized HTTP request methods, hosts, paths, response statuses, and cooldown suppression in diagnostic logs without recording query strings or authorization headers.
+
+## [2.20.0] - 2026-10-19
+
+### Added
+
+- Track Antigravity's Gemini and Claude/GPT quota pools separately, with independent context-menu toggles and tray summaries. Compact Fluent Quad shows both pools' gauges and alternates their usage labels; existing theme bindings continue to show Gemini. ([#178](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/178))
+- Cache the pools under `antigravity_gemini` and `antigravity_external`, with the legacy `antigravity` key mirroring the external pool when reported. Show missing pools and windows as no limit data, and preserve existing settings when migrating to pool-level visibility.
+
+### Fixed
+
+- Preserve the empty named-pool safeguard when selecting quota summaries. Mark both pools stale after a failed poll, and keep crossfades synchronized after provider changes, startup, and sleep.
+- Keep pool choices independent when migrating settings, and clear pool visibility when the legacy whole-provider menu disables Antigravity. Add regression coverage for migration, cached failures, external reset polling, and animation timing.
+
+## [2.19.10] - 2026-10-19
+
+### Fixed
+
+- Read Antigravity's Gemini quota from the first authoritative quota summary, keeping Claude/GPT pools separate and preserving missing windows as no limit data. Use only Gemini model quotas when no endpoint provides a summary, send a versioned User-Agent, and try the sandbox endpoint last. ([#177](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/177))
+- Keep empty named pools from falling back to an unrelated unnamed group's quota. Add regression coverage for pool selection, endpoint fallback, empty summaries, and unchanged reported reset times.
+- Cache absent usage windows with a null percentage so external readers can distinguish unavailable data from zero usage, while continuing to read older caches.
+
+## [2.19.9] - 2026-10-18
+
+### Fixed
+
+- Reconnect an open Settings or Theme Studio dashboard after the monitor recovers from a UI hang, preserving unsaved edits and undo history. Validate the replacement monitor's window class and process ID, and resolve command targets when sending settings, refresh, diagnostics, and update requests.
+- Add regression coverage for reconnection, preserved editor state, commands sent before the next dashboard refresh, stale monitor records, and standalone editors.
+
+## [2.19.8] - 2026-10-17
+
+### Changed
+
+- Update `winresource` from 0.1.31 to 0.1.34 for embedding the executable's Windows icon, manifest, and version metadata. ([#171](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/171))
+
+## [2.19.7] - 2026-10-17
+
+### Changed
+
+- Update `serde_json` from 1.0.151 to 1.0.154 for JSON parsing and serialization at build time and runtime. ([#170](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/170))
+
+## [2.19.6] - 2026-10-17
+
+### Changed
+
+- Update `lucide-icons` from 1.52.0 to 1.56.0 for the dashboard and Theme Studio icons and bundled icon font. ([#169](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/169))
+
+### Fixed
+
+- Update `zip` from 8.6.0 to 9.0.4 to resolve extraction advisories RUSTSEC-2026-0367, RUSTSEC-2026-0368, and RUSTSEC-2026-0369 found by the release dependency checks. Adapt theme package filename handling to the updated API and cover compressed export/import compatibility.
+
+## [2.19.5] - 2026-10-14
+
+### Fixed
+
+- Relaunch the widget when its UI thread stops answering for at least 30 seconds and ten consecutive probes, even while it holds application state. Back off repeated hang recoveries up to eight minutes, skip probes while a debugger is attached, and prevent concurrent watchdogs from spawning duplicate replacements. ([#168](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/168))
+- Preserve diagnostic recording and append existing logs across watchdog relaunches. Let recovery proceed when a frozen thread holds the diagnostic log mutex, and reset the hang deadline after long probe gaps such as system sleep.
+- Add regression coverage for responsive, frozen, and destroyed windows, recovery timing, sleep gaps, repeated-hang backoff, and log mutex contention.
+
 ## [2.19.4] - 2026-10-13
 
 ### Fixed
@@ -1360,3 +1499,19 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.1...v2.19.2
 [2.19.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.2...v2.19.3
 [2.19.4]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.3...v2.19.4
+[2.19.5]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.4...v2.19.5
+[2.19.6]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.5...v2.19.6
+[2.19.7]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.6...v2.19.7
+[2.19.8]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.7...v2.19.8
+[2.19.9]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.8...v2.19.9
+[2.19.10]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.9...v2.19.10
+[2.20.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.10...v2.20.0
+[2.20.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.0...v2.20.1
+[2.20.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.1...v2.20.2
+[2.20.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.2...v2.20.3
+[2.21.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.3...v2.21.0
+[2.21.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.0...v2.21.1
+[2.21.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.1...v2.21.2
+[2.21.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.2...v2.21.3
+[2.22.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.3...v2.22.0
+[2.22.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.22.0...v2.22.1

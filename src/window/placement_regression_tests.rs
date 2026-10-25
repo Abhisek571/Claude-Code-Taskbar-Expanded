@@ -1,6 +1,6 @@
 use super::*;
 
-fn state_for(theme: ThemeDocument, placement: PlacementOverride) -> AppState {
+pub(super) fn state_for(theme: ThemeDocument, placement: PlacementOverride) -> AppState {
     AppState {
         hwnd: SendHwnd::from_hwnd(HWND::default()),
         taskbar_hwnd: None,
@@ -12,6 +12,9 @@ fn state_for(theme: ThemeDocument, placement: PlacementOverride) -> AppState {
         language: LanguageId::English,
         install_channel: InstallChannel::Portable,
         providers: ProviderSet::default(),
+        show_antigravity_gemini: true,
+        show_antigravity_external: true,
+        crossfade_opacity: 1.0,
         accounts: Default::default(),
         data: None,
         poll_interval_ms: POLL_15_MIN,
