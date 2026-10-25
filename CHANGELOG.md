@@ -4,6 +4,13 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.21.3] - 2026-10-25
+
+### Fixed
+
+- Preserve the taskbar widget's pending hover timer across repeated mouse-move messages so redraws and repositioning cannot indefinitely delay its tooltip. Reuse active Windows tracking and request only missing hover or leave notifications. ([#159](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/159))
+- Add regression coverage for repeated mouse messages, tooltip dismissal, pointer re-entry, switching widget windows, and failed tracking queries.
+
 ## [2.21.2] - 2026-10-25
 
 ### Fixed
@@ -1483,3 +1490,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.21.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.3...v2.21.0
 [2.21.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.0...v2.21.1
 [2.21.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.1...v2.21.2
+[2.21.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.2...v2.21.3

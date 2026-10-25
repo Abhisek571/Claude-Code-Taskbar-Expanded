@@ -1,4 +1,5 @@
 use super::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::{TME_NONCLIENT, TME_QUERY};
 
 pub(super) fn surface_index_for_window(state: &AppState, hwnd: HWND) -> Option<usize> {
     if state.hwnd.to_hwnd() == hwnd {
@@ -195,19 +196,9 @@ pub(super) fn dispatch_double_click(hwnd: HWND, surface_index: usize, object_id:
 }
 
 pub(super) fn update_mouse_hover(hwnd: HWND, lparam: LPARAM) {
-    unsafe {
-        let mut tracking = TRACKMOUSEEVENT {
-            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-            dwFlags: if widget_tooltip::visible_for(hwnd) {
-                TME_LEAVE
-            } else {
-                TME_LEAVE | TME_HOVER
-            },
-            hwndTrack: hwnd,
-            dwHoverTime: HOVER_DEFAULT,
-        };
-        let _ = TrackMouseEvent(&mut tracking);
-    }
+    track_mouse_hover_with(hwnd, widget_tooltip::visible_for(hwnd), |tracking| unsafe {
+        TrackMouseEvent(tracking)
+    });
     for _ in 0..4 {
         let target = mouse_target_at(hwnd, lparam);
         let previous = {
@@ -230,6 +221,41 @@ pub(super) fn update_mouse_hover(hwnd: HWND, lparam: LPARAM) {
     diagnose::log("mouse enter/leave actions did not stabilize after four transitions");
     if let Some(state) = lock_state().as_mut() {
         state.hovered_mouse_layer = None;
+    }
+}
+
+fn track_mouse_hover_with(
+    hwnd: HWND,
+    tooltip_visible: bool,
+    mut track: impl FnMut(&mut TRACKMOUSEEVENT) -> windows::core::Result<()>,
+) {
+    let mut tracking = TRACKMOUSEEVENT {
+        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: TME_QUERY,
+        ..Default::default()
+    };
+    let active = if track(&mut tracking).is_ok()
+        && tracking.hwndTrack == hwnd
+        && !tracking.dwFlags.contains(TME_NONCLIENT)
+    {
+        tracking.dwFlags
+    } else {
+        Default::default()
+    };
+    let desired = if tooltip_visible {
+        TME_LEAVE
+    } else {
+        TME_LEAVE | TME_HOVER
+    };
+    let missing = desired & !active;
+    if missing.0 != 0 {
+        // Re-requesting TME_HOVER resets its timer, even for synthetic mouse
+        // moves caused by repainting/repositioning a stationary widget. Let
+        // Windows keep the hover rectangle and deadline until hover or leave.
+        tracking.dwFlags = missing;
+        tracking.hwndTrack = hwnd;
+        tracking.dwHoverTime = HOVER_DEFAULT;
+        let _ = track(&mut tracking);
     }
 }
 
@@ -345,4 +371,96 @@ pub(super) unsafe fn set_surface_cursor(hwnd: HWND) -> bool {
         SetCursor(Some(cursor));
     }
     clickable
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_mouse_moves_preserve_the_pending_hover_deadline() {
+        let hwnd = HWND(std::ptr::dangling_mut());
+        let mut active = TRACKMOUSEEVENT::default();
+        let mut deadline = None;
+        // Model Win32's documented timer reset on each TME_HOVER request.
+        // Repaints can generate mouse moves even with a stationary cursor.
+        for elapsed in (0..=500).step_by(50) {
+            track_mouse_hover_with(hwnd, false, |tracking| {
+                if tracking.dwFlags == TME_QUERY {
+                    tracking.hwndTrack = active.hwndTrack;
+                    tracking.dwFlags = active.dwFlags;
+                } else {
+                    assert_eq!(tracking.dwHoverTime, HOVER_DEFAULT);
+                    if tracking.dwFlags.contains(TME_HOVER) {
+                        deadline = Some(elapsed + 400);
+                    }
+                    active.hwndTrack = tracking.hwndTrack;
+                    active.dwFlags |= tracking.dwFlags;
+                }
+                Ok(())
+            });
+        }
+        assert_eq!(deadline, Some(400), "mouse moves postponed the hover");
+        assert_eq!(active.dwFlags, TME_HOVER | TME_LEAVE);
+    }
+
+    #[test]
+    fn hover_tracking_rearms_after_hover_leave_and_window_changes() {
+        let hwnd = HWND(std::ptr::dangling_mut());
+        let mirror = HWND(2 as *mut _);
+        for (tracked, active, visible, expected) in [
+            // A visible tooltip needs leave notifications, without rearming hover.
+            (hwnd, TME_LEAVE, true, None),
+            (hwnd, TME_HOVER | TME_LEAVE, true, None),
+            // Windows cancels hover after delivering WM_MOUSEHOVER. A dismissed
+            // popup can be shown again on a later mouse move.
+            (hwnd, TME_LEAVE, false, Some(TME_HOVER)),
+            // Adding leave tracking must not reset an existing hover timer.
+            (hwnd, TME_HOVER, false, Some(TME_LEAVE)),
+            // WM_MOUSELEAVE cancels all tracking; re-entry needs both flags.
+            (hwnd, Default::default(), false, Some(TME_HOVER | TME_LEAVE)),
+            // Tracking another surface or its nonclient area is not reusable.
+            (
+                mirror,
+                TME_HOVER | TME_LEAVE,
+                false,
+                Some(TME_HOVER | TME_LEAVE),
+            ),
+            (
+                hwnd,
+                TME_NONCLIENT | TME_HOVER | TME_LEAVE,
+                false,
+                Some(TME_HOVER | TME_LEAVE),
+            ),
+        ] {
+            let mut requests = Vec::new();
+            track_mouse_hover_with(hwnd, visible, |tracking| {
+                if tracking.dwFlags == TME_QUERY {
+                    tracking.hwndTrack = tracked;
+                    tracking.dwFlags = active;
+                } else {
+                    assert_eq!(tracking.hwndTrack, hwnd);
+                    requests.push(tracking.dwFlags);
+                }
+                Ok(())
+            });
+            assert_eq!(requests, expected.into_iter().collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn failed_tracking_query_still_arms_hover() {
+        let hwnd = HWND(std::ptr::dangling_mut());
+        let mut requested = false;
+        track_mouse_hover_with(hwnd, false, |tracking| {
+            if tracking.dwFlags == TME_QUERY {
+                return Err(windows::core::Error::from_hresult(E_FAIL));
+            }
+            assert_eq!(tracking.hwndTrack, hwnd);
+            assert_eq!(tracking.dwFlags, TME_HOVER | TME_LEAVE);
+            requested = true;
+            Ok(())
+        });
+        assert!(requested);
+    }
 }
