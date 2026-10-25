@@ -622,7 +622,8 @@ pub(super) fn format_duration_short(seconds: u64, context: &DataContext) -> Stri
 
     if seconds >= 86_400 {
         if seconds >= 864_000 {
-            let days = (seconds + 43_200) / 86_400;
+            // Round the remainder so even saturated template values cannot overflow.
+            let days = seconds / 86_400 + u64::from(seconds % 86_400 >= 43_200);
             format!("{days}{day_suffix}")
         } else {
             let days = seconds as f64 / 86_400.0;

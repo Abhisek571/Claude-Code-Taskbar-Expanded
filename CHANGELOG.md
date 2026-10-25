@@ -4,6 +4,13 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.22.2] - 2026-10-25
+
+### Fixed
+
+- Round compact theme reset countdowns instead of truncating them. Use half-hour and half-day steps below 10 hours and 10 days, whole units above, and rounded minutes capped at 59 before switching to hours. Roll late-hour countdowns into `1d` and retain localized suffixes. ([#176](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/176))
+- Prevent overflow when rounding extremely large duration values, and cover rounding thresholds, unit transitions, and saturated template values with regression tests.
+
 ## [2.22.1] - 2026-10-25
 
 ### Fixed
@@ -1515,3 +1522,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.21.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.2...v2.21.3
 [2.22.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.3...v2.22.0
 [2.22.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.22.0...v2.22.1
+[2.22.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.22.1...v2.22.2

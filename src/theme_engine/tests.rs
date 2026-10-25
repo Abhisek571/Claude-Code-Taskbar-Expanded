@@ -542,6 +542,46 @@ fn duration_short_precision_scale_and_half_steps() {
     check(0.0, "сейчас", &context);
 }
 
+#[test]
+fn duration_short_rounding_boundaries_and_extreme_values() {
+    let mut context = DataContext::default();
+    for (seconds, expected) in [
+        (-1.0, "now"),
+        (59.0, "59s"),
+        (60.0, "1m"),
+        (89.0, "1m"),
+        (90.0, "2m"),
+        (3599.0, "59m"),
+        (3600.0, "1h"),
+        (4499.0, "1h"),
+        (4500.0, "1.5h"),
+        (35099.0, "9.5h"),
+        (35100.0, "10h"),
+        (36000.0, "10h"),
+        (37799.0, "10h"),
+        (37800.0, "11h"),
+        (84599.0, "23h"),
+        (84600.0, "1d"),
+        (86399.0, "1d"),
+        (86400.0, "1d"),
+        (107999.0, "1d"),
+        (108000.0, "1.5d"),
+        (842399.0, "9.5d"),
+        (842400.0, "10d"),
+        (864000.0, "10d"),
+        (907199.0, "10d"),
+        (907200.0, "11d"),
+        (u64::MAX as f64, "213503982334601d"),
+        (f64::MAX, "213503982334601d"),
+    ] {
+        context.insert("reset", seconds);
+        assert_eq!(
+            format_template("{reset:duration_short}", &context),
+            expected,
+            "seconds = {seconds}"
+        );
+    }
+}
 
 #[test]
 fn text_templates_allow_if_to_return_quoted_strings() {
