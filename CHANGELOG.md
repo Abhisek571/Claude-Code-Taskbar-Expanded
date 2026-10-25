@@ -4,6 +4,51 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.21.1] - 2026-10-25
+
+### Fixed
+
+- Keep the monitor running when switching Windows accounts, changing display modes, or restarting Explorer. A hidden controller retains timers, tray callbacks, polling results, and the dashboard while missing widget, mirror, and desktop surfaces are recreated in place. Reserve process relaunches for an unresponsive UI thread. ([#175](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/175))
+- Use one taskbar-to-monitor rule across placement, drag docking, settings migration, and host sizing. Prefer the primary taskbar and overlapping secondary taskbars over off-screen stale hosts, while retaining Windows 10 auto-hide fallbacks. Temporarily move the main surface to the primary display and hide duplicates whose display is absent, retaining their saved placement for its return.
+- Keep surfaces hidden when their host is unavailable, and destroy surplus desktop windows when a theme removes them. Add geometry and isolated native-window regressions for host destruction, silent window loss, stable timers and state, and deferred shell callbacks.
+
+## [2.21.0] - 2026-10-25
+
+### Added
+
+- Show an Explorer-style hover popup on the default Classic widget in light and dark modes. Include the tray summary's selected providers, accounts, quota pools, and errors, with usage percentages to one decimal place and reset countdowns in days/hours or hours/minutes. Refresh the popup while visible and dismiss it when leaving, clicking, or dragging the widget.
+
+### Fixed
+
+- Update the transitive `clipboard-win` dependency from yanked 5.4.1 to 5.4.3 so the release dependency gate passes, retaining native text copy/paste through `arboard` and `egui-winit`.
+
+## [2.20.3] - 2026-10-22
+
+### Fixed
+
+- Pause requests for one minute after HTTP 429 responses without a usable `Retry-After` header, including repeated manual refreshes. Resume requests after the cooldown while keeping other accounts independent. ([#182](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/182))
+- Discover Claude desktop credentials and its bundled Claude Code executable under the migrated `%LOCALAPPDATA%\Claude-Data\claude_*` layout. Prefer migrated credential caches while retaining legacy roaming and Microsoft Store paths, and select the newest available bundled executable.
+- Isolate desktop discovery tests in temporary directories and cover migrated data discovery, bundled executable selection, rate-limit cooldowns, account independence, and recovery.
+
+## [2.20.2] - 2026-10-20
+
+### Fixed
+
+- Pin English in the shared Theme Studio test app so UI text assertions pass independently of the Windows display language. ([#179](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/179))
+- Update the transitive `webpki-root-certs` dependency from 1.0.9 to 1.0.10 to resolve RUSTSEC-2026-0383 found by the release dependency checks.
+
+## [2.20.1] - 2026-10-20
+
+### Fixed
+
+- Cap provider Retry-After cooldowns at 15 minutes and allow one manual recovery probe per minute after the first minute. Clear the cooldown on success and preserve its original deadline after failed probes, including responses with fresh Retry-After headers and network failures. Keep Claude Messages header probes exempt from cooldowns. ([#180](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/180))
+- Retry transient failures for enabled accounts after a partially successful poll, with exponential backoff that respects cooldowns. Keep successful readings visible and restore normal polling after recovery; permanent credential errors do not trigger these retries.
+- Add regression coverage for cooldown caps, manual probe recovery and throttling, unchanged deadlines after failures, and partial account retries.
+
+### Changed
+
+- Include sanitized HTTP request methods, hosts, paths, response statuses, and cooldown suppression in diagnostic logs without recording query strings or authorization headers.
+
 ## [2.20.0] - 2026-10-19
 
 ### Added
@@ -1424,3 +1469,8 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.19.9]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.8...v2.19.9
 [2.19.10]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.9...v2.19.10
 [2.20.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.19.10...v2.20.0
+[2.20.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.0...v2.20.1
+[2.20.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.1...v2.20.2
+[2.20.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.2...v2.20.3
+[2.21.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.20.3...v2.21.0
+[2.21.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.0...v2.21.1

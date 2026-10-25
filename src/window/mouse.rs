@@ -115,8 +115,12 @@ pub(super) fn execute_mouse_action_source(
             sync_tray_icon(owner);
             for effect in effects {
                 match effect {
-                    MouseActionEffect::ShowDashboard => crate::dashboard::show(owner),
-                    MouseActionEffect::ToggleDashboard => crate::dashboard::toggle(owner),
+                    MouseActionEffect::ShowDashboard => {
+                        crate::dashboard::show(controller_for(owner))
+                    }
+                    MouseActionEffect::ToggleDashboard => {
+                        crate::dashboard::toggle(controller_for(owner))
+                    }
                     MouseActionEffect::OpenUrl(url) => {
                         open_web_url(owner, &url, "mouse action URL could not be opened")
                     }
@@ -156,8 +160,8 @@ pub(super) fn schedule_or_dispatch_click(hwnd: HWND, surface_index: usize, objec
             state.hwnd.to_hwnd()
         };
         unsafe {
-            let _ = KillTimer(Some(owner), TIMER_MOUSE_CLICK);
-            SetTimer(
+            let _ = kill_controller_timer(Some(owner), TIMER_MOUSE_CLICK);
+            set_controller_timer(
                 Some(owner),
                 TIMER_MOUSE_CLICK,
                 GetDoubleClickTime().max(1),
@@ -184,7 +188,7 @@ pub(super) fn dispatch_double_click(hwnd: HWND, surface_index: usize, object_id:
         state.hwnd.to_hwnd()
     };
     unsafe {
-        let _ = KillTimer(Some(owner), TIMER_MOUSE_CLICK);
+        let _ = kill_controller_timer(Some(owner), TIMER_MOUSE_CLICK);
     }
     let _ = dispatch_mouse_event(surface_index, &object_id, MouseEventKind::DoubleClick);
     let _ = hwnd;
@@ -194,9 +198,13 @@ pub(super) fn update_mouse_hover(hwnd: HWND, lparam: LPARAM) {
     unsafe {
         let mut tracking = TRACKMOUSEEVENT {
             cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-            dwFlags: TME_LEAVE,
+            dwFlags: if widget_tooltip::visible_for(hwnd) {
+                TME_LEAVE
+            } else {
+                TME_LEAVE | TME_HOVER
+            },
             hwndTrack: hwnd,
-            dwHoverTime: 0,
+            dwHoverTime: HOVER_DEFAULT,
         };
         let _ = TrackMouseEvent(&mut tracking);
     }
@@ -226,6 +234,7 @@ pub(super) fn update_mouse_hover(hwnd: HWND, lparam: LPARAM) {
 }
 
 pub(super) fn clear_mouse_hover(hwnd: HWND) {
+    widget_tooltip::hide_for(hwnd);
     let previous = {
         let mut state = lock_state();
         let Some(state) = state.as_mut() else {
@@ -255,7 +264,7 @@ pub(super) fn update_tray_mouse_hover(hwnd: HWND, surface_index: usize, object_i
         };
         if state.hovered_mouse_layer == target {
             unsafe {
-                SetTimer(Some(hwnd), TIMER_TRAY_HOVER, 100, None);
+                set_controller_timer(Some(hwnd), TIMER_TRAY_HOVER, 100, None);
             }
             return;
         }
@@ -268,7 +277,7 @@ pub(super) fn update_tray_mouse_hover(hwnd: HWND, surface_index: usize, object_i
         let _ = dispatch_mouse_event(surface, &object, MouseEventKind::MouseEnter);
     }
     unsafe {
-        SetTimer(Some(hwnd), TIMER_TRAY_HOVER, 100, None);
+        set_controller_timer(Some(hwnd), TIMER_TRAY_HOVER, 100, None);
     }
 }
 
@@ -293,11 +302,11 @@ pub(super) fn clear_tray_mouse_hover_if_left(hwnd: HWND) {
     };
     let Some((target, true)) = hovered else {
         unsafe {
-            let _ = KillTimer(Some(hwnd), TIMER_TRAY_HOVER);
+            let _ = kill_controller_timer(Some(hwnd), TIMER_TRAY_HOVER);
         }
         return;
     };
-    if tray_icon::cursor_over_themed_icon(hwnd, target.0) {
+    if tray_icon::cursor_over_themed_icon(controller_for(hwnd), target.0) {
         return;
     }
     let previous = lock_state().as_mut().and_then(|state| {
@@ -306,7 +315,7 @@ pub(super) fn clear_tray_mouse_hover_if_left(hwnd: HWND) {
             .flatten()
     });
     unsafe {
-        let _ = KillTimer(Some(hwnd), TIMER_TRAY_HOVER);
+        let _ = kill_controller_timer(Some(hwnd), TIMER_TRAY_HOVER);
     }
     if let Some((surface, object)) = previous {
         let _ = dispatch_mouse_event(surface, &object, MouseEventKind::MouseLeave);

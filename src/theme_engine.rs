@@ -131,6 +131,9 @@ pub struct SceneObject {
     pub border: Option<Stroke>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mouse_events: Option<MouseEvents>,
+    /// Native hover popup for a root surface. Omitted by older/custom themes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<SurfaceTooltip>,
     #[serde(default)]
     pub corner_radius: Expression,
     #[serde(default)]
@@ -234,6 +237,12 @@ pub enum SurfaceNest {
     Floating,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceTooltip {
+    UsageSummary,
+}
+
 impl SurfaceNest {
     pub fn resolve(self, reference: ReferenceRegion) -> Self {
         match self {
@@ -325,6 +334,7 @@ impl SceneObject {
             background: LayerBackground::default(),
             border: None,
             mouse_events: None,
+            tooltip: None,
             corner_radius: 0.0.into(),
             layout: ChildLayout::Freeform,
             align: ChildAlignment::Start,
@@ -1073,6 +1083,8 @@ struct SceneObjectWire {
     #[serde(default)]
     mouse_events: Option<MouseEvents>,
     #[serde(default)]
+    tooltip: Option<SurfaceTooltip>,
+    #[serde(default)]
     corner_radius: Expression,
     #[serde(default)]
     layout: ChildLayout,
@@ -1156,6 +1168,7 @@ impl<'de> Deserialize<'de> for SceneObject {
             background: wire.background,
             border: wire.border,
             mouse_events: wire.mouse_events,
+            tooltip: wire.tooltip,
             corner_radius: wire.corner_radius,
             layout: wire.layout,
             align: wire.align,
