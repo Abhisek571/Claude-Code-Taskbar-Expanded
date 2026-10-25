@@ -604,8 +604,13 @@ pub(super) fn antigravity_usage_from_summary(
     let limits = antigravity_limits_from_summary_groups(&groups);
     for group in groups {
         // Argon has its own pool; it must not stand in for the main Gemini pool.
-        let is_gemini = is_antigravity_gemini_summary_group(&group)
-            && !is_antigravity_separate_gemini_group(&group);
+        if is_antigravity_separate_gemini_group(&group) {
+            // Its presence also rules out assigning an unrelated sole group
+            // through the unnamed-pool fallback below.
+            has_named_pool = true;
+            continue;
+        }
+        let is_gemini = is_antigravity_gemini_summary_group(&group);
         let is_external = is_antigravity_external_summary_group(&group);
         has_named_pool |= is_gemini || is_external;
         let usage = antigravity_usage_from_summary_group(group);
@@ -651,10 +656,16 @@ pub(super) fn antigravity_usage_from_summary(
 }
 
 pub(super) fn is_antigravity_separate_gemini_group(group: &AntigravityQuotaSummaryGroup) -> bool {
-    group
-        .display_name
-        .as_deref()
-        .is_some_and(|name| name.to_ascii_lowercase().contains("argon"))
+    let is_argon = |value: Option<&str>| {
+        value.is_some_and(|value| value.to_ascii_lowercase().contains("argon"))
+    };
+    is_argon(group.display_name.as_deref())
+        || is_argon(group.description.as_deref())
+        || group.buckets.as_ref().is_some_and(|buckets| {
+            buckets.iter().any(|bucket| {
+                is_argon(bucket.bucket_id.as_deref()) || is_argon(bucket.display_name.as_deref())
+            })
+        })
 }
 
 // The main and external pools show two groups only; themes need every group

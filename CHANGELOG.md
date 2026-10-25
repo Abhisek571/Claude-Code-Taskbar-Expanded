@@ -4,6 +4,17 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.22.0] - 2026-10-25
+
+### Added
+
+- Expose each named Antigravity quota group's reported 5h and weekly windows to themes through `antigravity.limits.<group_slug>_session` and `antigravity.limits.<group_slug>_weekly`, including the independent Gemini 4 Argon pool. Preserve the limits in cached usage. ([#172](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/172), [#173](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/pull/173))
+
+### Fixed
+
+- Send the Antigravity CLI User-Agent needed for the daily summary to include Gemini 4 Argon. Keep the first successful summary authoritative and retain the existing endpoint order.
+- Keep Argon out of the main Gemini headline, including Argon-only summaries and groups identified by description or bucket metadata. Add regression coverage for pool isolation, per-group theme bindings, cache round trips, missing quota values, and reported reset times.
+
 ## [2.21.3] - 2026-10-25
 
 ### Fixed
@@ -1491,3 +1502,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.21.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.0...v2.21.1
 [2.21.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.1...v2.21.2
 [2.21.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.2...v2.21.3
+[2.22.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.3...v2.22.0
