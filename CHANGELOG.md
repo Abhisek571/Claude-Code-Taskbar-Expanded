@@ -4,6 +4,13 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.22.4] - 2026-10-25
+
+### Fixed
+
+- Guard surface recreation against a mirror list that changes during window creation, destroying the unused replacement instead of indexing past the list and aborting the window procedure.
+- Replace the widget hover popup outside its thread-local borrow when showing or refreshing it, so a reentrant native callback cannot panic while an earlier popup is destroyed.
+
 ## [2.22.3] - 2026-10-25
 
 ### Changed
@@ -1530,3 +1537,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.22.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.22.0...v2.22.1
 [2.22.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.22.1...v2.22.2
 [2.22.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.22.2...v2.22.3
+[2.22.4]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.22.3...v2.22.4

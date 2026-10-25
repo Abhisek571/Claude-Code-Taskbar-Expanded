@@ -2035,8 +2035,19 @@ fn sync_surface_windows_with(mut create_desktop: impl FnMut() -> HWND) {
     for (index, mirror) in mirrors.into_iter().enumerate() {
         if !lifecycle::surface_has_class(mirror.to_hwnd(), "CCUMThemeMirror") {
             let replacement = unsafe { create_mirror_window() };
-            if let Some(state) = lock_state().as_mut() {
-                state.mirror_hwnds[index] = SendHwnd::from_hwnd(replacement);
+            // Window creation can re-enter; never index a list it may shrink.
+            let orphaned = match lock_state()
+                .as_mut()
+                .and_then(|state| state.mirror_hwnds.get_mut(index))
+            {
+                Some(slot) => {
+                    *slot = SendHwnd::from_hwnd(replacement);
+                    false
+                }
+                None => true,
+            };
+            if orphaned {
+                unsafe { lifecycle::destroy_surface(replacement) };
             }
         }
     }

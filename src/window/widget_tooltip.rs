@@ -185,7 +185,7 @@ pub(super) fn show(owner: HWND) {
             Some(LPARAM(&info as *const _ as isize)),
         );
         set_controller_timer(Some(controller), REFRESH_TIMER, 1_000, None);
-        TOOLTIP.with(|slot| *slot.borrow_mut() = Some(tooltip));
+        store(tooltip);
     }
 }
 
@@ -271,7 +271,14 @@ pub(super) fn refresh() {
         }
         drop(previous);
     }
-    TOOLTIP.with(|slot| *slot.borrow_mut() = Some(tooltip));
+    store(tooltip);
+}
+
+fn store(tooltip: WidgetTooltip) {
+    // A popup shown by a reentrant call is replaced, and destroyed outside the
+    // RefCell borrow for the same reason as `hide`.
+    let replaced = TOOLTIP.with(|slot| slot.borrow_mut().replace(tooltip));
+    drop(replaced);
 }
 
 fn cursor_over(owner: HWND) -> Option<POINT> {
