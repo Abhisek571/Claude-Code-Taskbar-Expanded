@@ -750,6 +750,29 @@ fn built_in_classic_uses_149_geometry() {
 }
 
 #[test]
+fn classic_hover_summary_survives_theme_round_trips_and_is_opt_in() {
+    let theme = ThemeDocument::starter();
+    assert_eq!(
+        theme.surfaces[0].tooltip,
+        Some(SurfaceTooltip::UsageSummary)
+    );
+    let json = serde_json::to_string(&theme).unwrap();
+    let reloaded: ThemeDocument = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        reloaded.surfaces[0].tooltip,
+        Some(SurfaceTooltip::UsageSummary)
+    );
+    let legacy: SceneObject = serde_json::from_str(r#"{"id":"old","name":"Old theme"}"#).unwrap();
+    assert_eq!(legacy.tooltip, None);
+    assert!(!serde_json::to_string(&legacy).unwrap().contains("tooltip"));
+    assert!(theme
+        .surfaces
+        .iter()
+        .skip(1)
+        .all(|surface| surface.tooltip.is_none()));
+}
+
+#[test]
 fn built_in_classic_adds_a_fable_column_when_the_limit_is_available() {
     use crate::models::{UsageData, UsageLimit, UsageSection};
 
@@ -1039,6 +1062,29 @@ fn provider_specific_long_window_labels_are_available_to_templates() {
     let context = DataContext::from_usage(Some(&usage), &Canvas::default());
     assert_eq!(format_template("{opencode.weekly.label}", &context), "30d");
     assert_eq!(format_template("{claude.weekly.label}", &context), "7d");
+}
+
+#[test]
+fn provider_specific_session_window_labels_are_available_to_templates() {
+    // Cursor reports a seven-day included-usage window rather than the default
+    // five-hour session, so themes can show the real period length.
+    let usage = crate::models::AppUsageData::from_iter([(
+        ProviderId::Cursor,
+        crate::models::UsageData {
+            session_label: Some("7d".into()),
+            ..Default::default()
+        },
+    )]);
+    let context = DataContext::from_usage(Some(&usage), &Canvas::default());
+    assert_eq!(format_template("{cursor.session.label}", &context), "7d");
+    assert_eq!(format_template("{claude.session.label}", &context), "5h");
+    let localized = DataContext::from_usage_with_runtime(
+        Some(&usage),
+        &Canvas::default(),
+        ThemeRuntime::default().with_language(LanguageId::from_code("nl").unwrap()),
+    );
+    assert_eq!(format_template("{cursor.session.label}", &localized), "7d");
+    assert_eq!(format_template("{claude.session.label}", &localized), "5u");
 }
 
 #[test]
