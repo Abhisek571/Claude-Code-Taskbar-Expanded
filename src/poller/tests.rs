@@ -61,6 +61,14 @@ fn configured_https_transport_does_not_panic() {
 }
 
 #[test]
+#[ignore = "requires direct Internet access to github.com and badssl.com"]
+fn configured_https_transport_validates_certificates() {
+    crate::https_test::assert_https_certificate_validation(
+        build_agent().expect("HTTP agent should build"),
+    );
+}
+
+#[test]
 fn stale_usage_does_not_trigger_reset_polling() {
     let mut usage = usage_with_session_percent(42.0);
     usage.session.resets_at = Some(UNIX_EPOCH);

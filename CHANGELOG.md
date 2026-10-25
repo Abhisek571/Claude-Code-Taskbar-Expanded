@@ -4,6 +4,17 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.22.1] - 2026-10-25
+
+### Fixed
+
+- Upgrade `ureq` to 3.5.0, which includes the [upstream connector feature fix](https://github.com/algesten/ureq/pull/1204), and enable `native-tls-no-default`. Remove `webpki-root-certs` from the resolved dependencies and its unused license allowance while retaining Windows certificate-store verification for polling and update downloads. ([#111](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/issues/111))
+- Retain local TLS handshake regression checks for both production agents and add opt-in HTTPS checks for a valid certificate and rejection of self-signed, expired, and mismatched-host certificates. Document how to rerun them after TLS dependency changes.
+
+### Changed
+
+- Reduce the local Windows release executable from 7,659,008 bytes (v2.22.0) to 7,536,640 bytes, a decrease of 122,368 bytes (1.6%).
+
 ## [2.22.0] - 2026-10-25
 
 ### Added
@@ -1503,3 +1514,4 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.21.2]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.1...v2.21.2
 [2.21.3]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.2...v2.21.3
 [2.22.0]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.21.3...v2.22.0
+[2.22.1]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.22.0...v2.22.1
