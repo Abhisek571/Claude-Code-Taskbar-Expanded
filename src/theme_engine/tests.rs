@@ -1009,15 +1009,13 @@ fn starter_theme_round_trips_and_validates() {
         })
         .collect::<Vec<_>>();
     // Classic contains separate light and dark progress layers so the
-    // 1.4.9 palette follows the taskbar mode without runtime recolouring:
-    // five providers over two windows in two modes, plus Grok and Copilot,
-    // which fill only the long-window row, plus a credit overlay on that row
-    // for the three providers that report credits, plus the two eight-segment
-    // Fable layers.
-    assert_eq!(
-        segments,
-        [vec![10; 5 * 2 * 2 + 2 * 2 + 3 * 2], vec![8; 2]].concat()
-    );
+    // palette follows the taskbar mode without runtime recolouring: five
+    // providers over two windows in two modes, plus Grok and Copilot, which
+    // fill only the long-window row, plus a credit overlay on that row for
+    // the three providers that report credits, plus the two Fable layers.
+    // All are continuous bars. The six Claude and Fable bars have extra
+    // amber and red variants for higher usage.
+    assert_eq!(segments, vec![0; 5 * 2 * 2 + 2 * 2 + 3 * 2 + 2 + 6 * 2]);
     assert!(theme.surfaces[0]
         .children
         .iter()

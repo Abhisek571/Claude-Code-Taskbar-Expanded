@@ -479,6 +479,10 @@ pub enum MouseAction {
     ShowContextMenu {
         menu: Option<String>,
     },
+    /// Focus the Claude Code session behind a task chip.
+    OpenTask {
+        target: crate::tasks::ChipTarget,
+    },
     Set {
         target: MouseActionTarget,
         property: MouseActionProperty,
@@ -517,6 +521,7 @@ pub enum MouseActionEffect {
     ToggleDashboard,
     OpenUrl(String),
     ShowContextMenu(Option<String>),
+    OpenTask(crate::tasks::ChipTarget),
 }
 
 /// Parse the deliberately small, line-or-semicolon separated action language.
@@ -563,6 +568,28 @@ pub fn parse_mouse_actions(source: &str) -> Result<Vec<MouseAction>, String> {
             }
             "show_context_menu" => {
                 return Err("show_context_menu expects zero or one quoted menu id or name".into())
+            }
+            "open_task" => match args.as_slice() {
+                [slot] => actions.push(MouseAction::OpenTask {
+                    target: crate::tasks::ChipTarget::Slot(
+                        slot.trim()
+                            .parse::<usize>()
+                            .map_err(|_| "open_task expects a chip slot number".to_string())?,
+                    ),
+                }),
+                _ => return Err("open_task expects one chip slot number".into()),
+            },
+            "open_more_tasks" | "open_working_tasks" | "open_done_tasks" if args.is_empty() => {
+                actions.push(MouseAction::OpenTask {
+                    target: match name.as_str() {
+                        "open_more_tasks" => crate::tasks::ChipTarget::More,
+                        "open_working_tasks" => crate::tasks::ChipTarget::Working,
+                        _ => crate::tasks::ChipTarget::Done,
+                    },
+                })
+            }
+            "open_more_tasks" | "open_working_tasks" | "open_done_tasks" => {
+                return Err(format!("{name}() does not take arguments"))
             }
             "set" | "increase" | "decrease" => {
                 let (target, property, value) = match args.as_slice() {
@@ -1515,6 +1542,7 @@ impl DataContext {
         context.insert_string("i18n.minute_suffix", strings.minute_suffix);
         context.insert_string("i18n.second_suffix", strings.second_suffix);
         context.insert("providers.count", runtime.provider_count() as f64);
+        crate::tasks::insert_context(&mut context);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|value| value.as_secs_f64())
@@ -1898,6 +1926,17 @@ impl DataContext {
         self.strings.insert(name.to_ascii_lowercase(), value.into());
     }
 
+    /// Copy every binding from `other`, replacing values with the same name.
+    pub fn extend(&mut self, other: &Self) {
+        self.values.extend(
+            other
+                .values
+                .iter()
+                .map(|(name, value)| (name.clone(), *value)),
+        );
+        self.strings.extend(other.strings.clone());
+    }
+
     pub fn get_string(&self, name: &str) -> Option<&str> {
         let name = name.to_ascii_lowercase();
         self.strings
@@ -2064,6 +2103,7 @@ pub fn validate_mouse_action_script(
             MouseAction::ShowDashboard
             | MouseAction::ToggleDashboard
             | MouseAction::OpenUrl { .. }
+            | MouseAction::OpenTask { .. }
             | MouseAction::ShowContextMenu { .. } => continue,
             MouseAction::Set {
                 target,
@@ -2270,6 +2310,7 @@ pub fn execute_mouse_actions(
             MouseAction::ShowDashboard => effects.push(MouseActionEffect::ShowDashboard),
             MouseAction::ToggleDashboard => effects.push(MouseActionEffect::ToggleDashboard),
             MouseAction::OpenUrl { url } => effects.push(MouseActionEffect::OpenUrl(url)),
+            MouseAction::OpenTask { target } => effects.push(MouseActionEffect::OpenTask(target)),
             MouseAction::ShowContextMenu { menu } => {
                 effects.push(MouseActionEffect::ShowContextMenu(menu))
             }

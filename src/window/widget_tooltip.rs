@@ -80,6 +80,13 @@ fn content(owner: HWND) -> Option<(String, bool, HWND)> {
     let theme = effective_theme_from_state(state)?;
     let surface = theme.surfaces.get(surface_index)?;
     let runtime = theme_runtime_for_surface(&theme, surface_index, theme_runtime_from_state(state));
+    if let Some(text) = task_tooltip(owner, state, &theme, surface_index, runtime) {
+        return Some((
+            text,
+            theme::is_dark_mode(),
+            controller_for(state.hwnd.to_hwnd()),
+        ));
+    }
     if surface.tooltip != Some(theme_engine::SurfaceTooltip::UsageSummary)
         || !theme_engine::surface_should_render(&theme, surface_index, state.data.as_ref(), runtime)
     {
@@ -116,6 +123,39 @@ fn content(owner: HWND) -> Option<(String, bool, HWND)> {
         theme::is_dark_mode(),
         controller_for(state.hwnd.to_hwnd()),
     ))
+}
+
+/// Task chips show their project's sessions instead of the usage summary.
+fn task_tooltip(
+    owner: HWND,
+    state: &AppState,
+    theme: &ThemeDocument,
+    surface_index: usize,
+    runtime: ThemeRuntime,
+) -> Option<String> {
+    let mut cursor = POINT::default();
+    unsafe {
+        GetCursorPos(&mut cursor).ok()?;
+        if !ScreenToClient(owner, &mut cursor).as_bool() {
+            return None;
+        }
+    }
+    let scale = theme_surface_scale(theme, surface_index).max(0.01);
+    let object_id = theme_engine::hit_test_mouse_event(
+        theme,
+        surface_index,
+        f64::from(cursor.x) / scale,
+        f64::from(cursor.y) / scale,
+        state.data.as_ref(),
+        runtime,
+    )?;
+    let target = match object_id.as_str() {
+        "task-more" => crate::tasks::ChipTarget::More,
+        "task-working" => crate::tasks::ChipTarget::Working,
+        "task-done" => crate::tasks::ChipTarget::Done,
+        id => crate::tasks::ChipTarget::Slot(id.strip_prefix("task-chip-")?.parse().ok()?),
+    };
+    crate::tasks::tooltip_text(target)
 }
 
 fn set_theme(window: HWND, dark: bool) {
@@ -184,6 +224,7 @@ pub(super) fn show(owner: HWND) {
             Some(WPARAM(1)),
             Some(LPARAM(&info as *const _ as isize)),
         );
+        keep_clear_of_cursor(window, owner, cursor);
         set_controller_timer(Some(controller), REFRESH_TIMER, 1_000, None);
         store(tooltip);
     }
@@ -270,8 +311,46 @@ pub(super) fn refresh() {
             );
         }
         drop(previous);
+        if let Some(cursor) = cursor_over(tooltip.owner) {
+            keep_clear_of_cursor(tooltip.window, tooltip.owner, cursor);
+        }
     }
     store(tooltip);
+}
+
+/// A tall popup pushed back onto the screen by Windows can land under the
+/// cursor, which the widget reads as the mouse leaving. Move it to sit above
+/// (or below) the widget instead.
+fn keep_clear_of_cursor(window: HWND, owner: HWND, cursor: POINT) {
+    let (Some(tip), Some(widget)) = (
+        native_interop::get_window_rect_safe(window),
+        native_interop::get_window_rect_safe(owner),
+    ) else {
+        return;
+    };
+    let covers = cursor.x >= tip.left
+        && cursor.x < tip.right
+        && cursor.y >= tip.top
+        && cursor.y < tip.bottom;
+    if !covers {
+        return;
+    }
+    let height = tip.bottom - tip.top;
+    let gap = (4 * unsafe { GetDpiForWindow(owner) }.max(96) / 96) as i32;
+    let y = if widget.top - height - gap >= 0 {
+        widget.top - height - gap
+    } else {
+        widget.bottom + gap
+    };
+    let packed = (tip.left as u32 & 0xffff) | ((y as u32 & 0xffff) << 16);
+    unsafe {
+        SendMessageW(
+            window,
+            TTM_TRACKPOSITION,
+            None,
+            Some(LPARAM(packed as isize)),
+        );
+    }
 }
 
 fn store(tooltip: WidgetTooltip) {

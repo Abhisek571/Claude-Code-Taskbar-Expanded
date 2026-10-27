@@ -240,8 +240,12 @@ fn open_web_url(hwnd: HWND, url: &str, failure_message: &'static str) {
 }
 
 /// How often the watchdog thread polls for an explorer.exe restart (which
-/// recreates the taskbar and wipes our tray-icon registration).
-const TASKBAR_WATCH_INTERVAL_SECS: u64 = 2;
+/// recreates the taskbar and wipes our tray-icon registration) and for taskbar
+/// icons crowding the widget. Most of the widget's idle CPU is this check.
+const TASKBAR_WATCH_INTERVAL_SECS: u64 = 4;
+
+/// How often the hang watchdog probes the UI thread.
+const UI_HANG_PROBE_INTERVAL_SECS: u64 = 2;
 
 const TASKBAR_COLLISION_REPOSITION: usize = 2;
 
@@ -549,7 +553,7 @@ fn spawn_ui_hang_watchdog() {
     std::thread::spawn(move || {
         let mut silence: Option<UiSilence> = None;
         loop {
-            std::thread::sleep(Duration::from_secs(TASKBAR_WATCH_INTERVAL_SECS));
+            std::thread::sleep(Duration::from_secs(UI_HANG_PROBE_INTERVAL_SECS));
             // Stepping through the UI thread in a debugger leaves it as silent
             // as a wedged one, and a relaunch would end the debugging session.
             if unsafe { IsDebuggerPresent() }.as_bool() {
@@ -2641,6 +2645,12 @@ pub fn run() {
 
         // Initial render using the presenter selected by the surface nest.
         schedule_countdown_timer();
+        set_controller_timer(
+            Some(hwnd),
+            native_interop::TIMER_TASKS,
+            crate::tasks::refresh_interval_ms(),
+            None,
+        );
         schedule_clock_timer();
         let startup_dual_mode = {
             let state = lock_state();

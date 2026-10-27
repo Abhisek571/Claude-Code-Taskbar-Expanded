@@ -86,6 +86,16 @@ pub struct SettingsFile {
     pub lock_taskbar: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement_override: Option<PlacementOverride>,
+    /// Claude Code project chips shown for sessions that need the user
+    /// (0 to 6); the rest go into a `+N` chip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_chips: Option<usize>,
+    /// Claude Code project chips shown for working sessions (0 to 6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_chips: Option<usize>,
+    /// Claude Code project chips shown for finished sessions (0 to 6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_chips: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +155,9 @@ impl Default for SettingsFile {
             floating_card_opacity: None,
             lock_taskbar: false,
             placement_override: None,
+            attention_chips: None,
+            working_chips: None,
+            done_chips: None,
         }
     }
 }

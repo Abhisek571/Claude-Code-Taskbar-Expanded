@@ -16,6 +16,7 @@ mod native_interop;
 mod poller;
 mod providers;
 mod studio_app;
+mod tasks;
 mod theme;
 mod theme_engine;
 mod theme_package;
@@ -26,9 +27,15 @@ mod window;
 mod winsqlite;
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    // Claude Code hook: record the session and exit without any UI.
+    if args.get(1).is_some_and(|arg| arg == "--hook") {
+        tasks::run_hook();
+        return;
+    }
+
     diagnose::install_panic_hook();
 
-    let args: Vec<String> = std::env::args().collect();
     let diagnose_enabled = args.iter().any(|arg| arg == "--diagnose");
     if diagnose_enabled {
         let init_result = if args.iter().any(|arg| arg == "--diagnose-append") {

@@ -1,14 +1,46 @@
-# Claude Code Usage Monitor
+# Claude Code Taskbar Expanded
 
 ![Windows](https://img.shields.io/badge/platform-Windows-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A lightweight, open-source Windows taskbar widget for monitoring Claude Code usage limits and reset times. It can also display usage for Codex, Google Antigravity, OpenCode Go, Cursor, Grok Build, and GitHub Copilot.
+A fork of [CodeZeno's Claude Code Usage Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor) that also shows your running Claude Code sessions in the Windows taskbar, next to your usage limits.
 
 See the [user guide](USER_GUIDE.md) for theme customisation and everyday settings,
 or the [changelog](CHANGELOG.md) for version history and notable changes.
 
-![Claude Code Usage Monitor running in the Windows taskbar](.github/animation.gif)
+## What this fork adds
+
+- **Session chips grouped by what they need from you.** Projects waiting on you come first (a red lock for a permission prompt, a yellow ? when Claude asked you a question), then working projects (green sync icon), then finished ones (grey check mark). Each group shows up to a set number of chips, then a `+N` chip for the rest.
+- **Full project names** sized to fit; worktrees under `.claude\worktrees` count as their repository.
+- **Hover a chip** to see each session's status, latest prompt, model, subagent count, last activity, and what it is waiting on.
+- **Double-click a chip** to bring that session's window to the front: its terminal, editor, or the Claude desktop app.
+- **Usage bars that change colour** with usage: green under 50%, amber from 50%, red from 80%.
+- **Chip limits in the dashboard** under Settings → Claude Code tasks (needs you, working, done; 0 to 6 each).
+- **Updates come from this repository**, so an update never swaps in the original app and drops the session chips.
+
+### Connect Claude Code
+
+Session status comes from [Claude Code hooks](https://code.claude.com/docs/en/hooks). Each hook runs the monitor with `--hook` in the background, so it never slows Claude Code down. Add this to `%USERPROFILE%\.claude\settings.json`, with `command` set to where you keep the exe:
+
+```json
+{
+  "hooks": {
+    "SessionStart":       [{ "hooks": [{ "type": "command", "command": "C:\\Users\\you\\AppData\\Local\\Programs\\ClaudeCodeUsageMonitor\\claude-code-usage-monitor.exe", "args": ["--hook"], "async": true }] }],
+    "SessionEnd":         [{ "hooks": [{ "type": "command", "command": "C:\\Users\\you\\AppData\\Local\\Programs\\ClaudeCodeUsageMonitor\\claude-code-usage-monitor.exe", "args": ["--hook"], "async": true }] }],
+    "UserPromptSubmit":   [{ "hooks": [{ "type": "command", "command": "C:\\Users\\you\\AppData\\Local\\Programs\\ClaudeCodeUsageMonitor\\claude-code-usage-monitor.exe", "args": ["--hook"], "async": true }] }],
+    "PreToolUse":         [{ "hooks": [{ "type": "command", "command": "C:\\Users\\you\\AppData\\Local\\Programs\\ClaudeCodeUsageMonitor\\claude-code-usage-monitor.exe", "args": ["--hook"], "async": true }] }],
+    "PostToolUse":        [{ "hooks": [{ "type": "command", "command": "C:\\Users\\you\\AppData\\Local\\Programs\\ClaudeCodeUsageMonitor\\claude-code-usage-monitor.exe", "args": ["--hook"], "async": true }] }],
+    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "C:\\Users\\you\\AppData\\Local\\Programs\\ClaudeCodeUsageMonitor\\claude-code-usage-monitor.exe", "args": ["--hook"], "async": true }] }],
+    "PermissionRequest":  [{ "hooks": [{ "type": "command", "command": "C:\\Users\\you\\AppData\\Local\\Programs\\ClaudeCodeUsageMonitor\\claude-code-usage-monitor.exe", "args": ["--hook"], "async": true }] }],
+    "Notification":       [{ "hooks": [{ "type": "command", "command": "C:\\Users\\you\\AppData\\Local\\Programs\\ClaudeCodeUsageMonitor\\claude-code-usage-monitor.exe", "args": ["--hook"], "async": true }] }],
+    "Stop":               [{ "hooks": [{ "type": "command", "command": "C:\\Users\\you\\AppData\\Local\\Programs\\ClaudeCodeUsageMonitor\\claude-code-usage-monitor.exe", "args": ["--hook"], "async": true }] }],
+    "SubagentStart":      [{ "hooks": [{ "type": "command", "command": "C:\\Users\\you\\AppData\\Local\\Programs\\ClaudeCodeUsageMonitor\\claude-code-usage-monitor.exe", "args": ["--hook"], "async": true }] }],
+    "SubagentStop":       [{ "hooks": [{ "type": "command", "command": "C:\\Users\\you\\AppData\\Local\\Programs\\ClaudeCodeUsageMonitor\\claude-code-usage-monitor.exe", "args": ["--hook"], "async": true }] }]
+  }
+}
+```
+
+Sessions are recorded in `%APPDATA%\ClaudeCodeUsageMonitor\tasks` and stay on your PC. A session whose Claude Code process has exited is removed automatically.
 
 ## Features
 
@@ -24,20 +56,16 @@ or the [changelog](CHANGELOG.md) for version history and notable changes.
 
 ## Requirements
 
-- Windows 10 or Windows 11
+- Windows 11 (the session icons use the Segoe Fluent Icons font), or Windows 10 with usage only
 - At least one supported provider installed and signed in
 
 Claude Code credentials can be detected from the CLI, Claude desktop app, or WSL. Other providers are optional and can be enabled independently from the dashboard.
 
 ## Installation
 
-Install the latest release with WinGet:
+Download `claude-code-usage-monitor.exe` from [Releases](https://github.com/Abhisek571/Claude-Code-Taskbar-Expanded/releases), keep it somewhere permanent (for example `%LOCALAPPDATA%\Programs\ClaudeCodeUsageMonitor`), run it, then [connect Claude Code](#connect-claude-code).
 
-```powershell
-winget install CodeZeno.ClaudeCodeUsageMonitor
-```
-
-Alternatively, download `claude-code-usage-monitor.exe` from [GitHub Releases](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases).
+The `winget` package installs the original app without session chips.
 
 See [updater verification](docs/updater.md) for the portable updater's integrity checks and trust boundary.
 

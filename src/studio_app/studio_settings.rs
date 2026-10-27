@@ -150,6 +150,55 @@ impl StudioApp {
                     },
                 );
             });
+            section(ui, language.text("Claude Code tasks"), |ui| {
+                let defaults = crate::tasks::DEFAULT_LIMITS;
+                for (index, (id, title, description, value, default)) in [
+                    (
+                        "attention_chips",
+                        "Needs you",
+                        "Projects waiting on you shown before a + chip",
+                        &mut self.settings.attention_chips,
+                        defaults.attention,
+                    ),
+                    (
+                        "working_chips",
+                        "Working",
+                        "Working projects shown before a + chip",
+                        &mut self.settings.working_chips,
+                        defaults.working,
+                    ),
+                    (
+                        "done_chips",
+                        "Done",
+                        "Finished projects shown before a + chip",
+                        &mut self.settings.done_chips,
+                        defaults.done,
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if index > 0 {
+                        setting_separator(ui);
+                    }
+                    setting_row(ui, title, description, |ui| {
+                        let mut count = value.unwrap_or(default);
+                        if ui
+                            .push_id(id, |ui| {
+                                NumberField::new(&mut count)
+                                    .range(0..=crate::tasks::MAX_PER_GROUP)
+                                    .speed(0.1)
+                                    .show(ui, 100.0)
+                            })
+                            .inner
+                            .changed()
+                        {
+                            *value = Some(count);
+                            changed = true;
+                        }
+                    });
+                }
+            });
             section(ui, language.text("Appearance"), |ui| {
                 setting_row(
                     ui,

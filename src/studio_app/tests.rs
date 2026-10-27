@@ -1446,8 +1446,8 @@ fn dirty_theme_defers_new_theme_until_the_user_decides() {
 fn version_text_and_trailing_icon_share_one_update_button() {
     fn footer_button(app: &mut StudioApp, ui: &mut egui::Ui) -> egui::Response {
         ui.allocate_ui_with_layout(
-            egui::vec2(94.0, CONTROL_HEIGHT),
-            egui::Layout::right_to_left(egui::Align::Max),
+            egui::vec2(DEFAULT_MENU_WIDTH - 16.0, CONTROL_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Max),
             |ui| app.version_button(ui),
         )
         .inner
@@ -1466,7 +1466,8 @@ fn version_text_and_trailing_icon_share_one_update_button() {
             run_test_ui(&context, egui::RawInput::default(), |ui| {
                 rect = footer_button(&mut app, ui).rect;
             });
-            let footer_space = DEFAULT_MENU_WIDTH - 16.0 - 36.0 * 98.0 / 96.0 - 4.0;
+            // The version has its own footer row, under the GitHub link.
+            let footer_space = DEFAULT_MENU_WIDTH - 16.0;
             assert!(
                 rect.width() <= footer_space,
                 "version button overflows footer: {rect:?}"

@@ -72,6 +72,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     sync_tray_icon(hwnd);
                     schedule_countdown_timer();
                 }
+                native_interop::TIMER_TASKS if crate::tasks::refresh() => render_layered(),
                 TIMER_CLOCK => {
                     render_layered();
                     let refresh_tray = lock_state()

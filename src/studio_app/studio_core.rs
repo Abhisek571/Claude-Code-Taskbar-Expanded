@@ -983,7 +983,8 @@ impl StudioApp {
     }
 
     pub(super) fn shell(&mut self, ui: &mut egui::Ui) {
-        const GITHUB_URL: &str = "https://github.com/CodeZeno/Claude-Code-Usage-Monitor";
+        const GITHUB_URL: &str = env!("CARGO_PKG_REPOSITORY");
+        const UPSTREAM_URL: &str = "https://github.com/CodeZeno/Claude-Code-Usage-Monitor";
 
         let language = self.language();
         let full_height = ui.available_height();
@@ -1034,6 +1035,14 @@ impl StudioApp {
                                 ui.available_size(),
                                 egui::Layout::bottom_up(egui::Align::Min),
                                 |ui| {
+                                    crate::ui::components::navigation::fork_credit(
+                                        ui,
+                                        language
+                                            .text("Fork of CodeZeno's Claude Code Usage Monitor"),
+                                        UPSTREAM_URL,
+                                    );
+                                    // "+tasks" makes the version too wide to share a
+                                    // row with the GitHub link, so each gets its own.
                                     ui.allocate_ui_with_layout(
                                         egui::vec2(
                                             ui.available_width(),
@@ -1041,15 +1050,18 @@ impl StudioApp {
                                         ),
                                         egui::Layout::left_to_right(egui::Align::Max),
                                         |ui| {
-                                            ui.spacing_mut().item_spacing.x = 4.0;
+                                            self.version_button(ui);
+                                        },
+                                    );
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(
+                                            ui.available_width(),
+                                            crate::ui::components::navigation::ITEM_HEIGHT,
+                                        ),
+                                        egui::Layout::left_to_right(egui::Align::Max),
+                                        |ui| {
                                             crate::ui::components::navigation::github_link(
                                                 ui, GITHUB_URL,
-                                            );
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Max),
-                                                |ui| {
-                                                    self.version_button(ui);
-                                                },
                                             );
                                         },
                                     );

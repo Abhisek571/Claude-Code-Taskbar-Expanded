@@ -122,7 +122,16 @@ pub fn current_install_channel() -> InstallChannel {
     }
 }
 
+/// Updates come from this fork's own releases (`repository` in Cargo.toml),
+/// never upstream's, so an update keeps the Claude Code task chips. Set this
+/// to false to stop all update checks; automatic checks then fail silently
+/// and a manual check shows the message below.
+const UPDATES_ENABLED: bool = true;
+
 pub fn check_for_updates(channel: InstallChannel) -> Result<UpdateCheckResult, String> {
+    if !UPDATES_ENABLED {
+        return Err("Updates are turned off in this build".into());
+    }
     check_channel_updates(channel, fetch_latest_release, winget_listed_versions)
 }
 

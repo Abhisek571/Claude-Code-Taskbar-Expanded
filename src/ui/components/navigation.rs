@@ -42,6 +42,22 @@ pub(crate) fn github_link(ui: &mut egui::Ui, url: &str) -> egui::Response {
     })
 }
 
+/// A small wrapped credit line that opens `url`, shown under the footer.
+pub(crate) fn fork_credit(ui: &mut egui::Ui, text: &str, url: &str) -> egui::Response {
+    let response = ui
+        .add(
+            egui::Label::new(egui::RichText::new(text).size(12.0).color(menu_text()))
+                .wrap()
+                .sense(egui::Sense::click()),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(url);
+    if response.clicked() && !crate::native_interop::open_web_url(None, url) {
+        crate::diagnose::log("unable to open dashboard fork link");
+    }
+    response
+}
+
 fn github_link_with(
     ui: &mut egui::Ui,
     url: &str,
