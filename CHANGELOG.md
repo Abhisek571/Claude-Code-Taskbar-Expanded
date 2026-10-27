@@ -5,6 +5,12 @@ Monitor, are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [Unreleased]
+
+### Changed
+
+- Show low usage (under 50%) in blue instead of green, so it stays distinct from the amber warning colour for people with red-green colour blindness.
+
 ## [2.23.0] - 2026-10-27
 
 First release of Claude Code Taskbar Expanded.

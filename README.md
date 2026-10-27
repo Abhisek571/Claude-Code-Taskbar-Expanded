@@ -9,7 +9,7 @@ Your Claude Code usage and running sessions in the Windows taskbar. A fork of [C
 
 - **Needs you first:** red lock for permission prompts, yellow ? for questions.
 - **Then working** (green sync) **and done** (grey check), each with a `+N` chip when full.
-- **Usage bars** turn green, amber at 50%, red at 80%.
+- **Usage bars** are blue, then amber at 50% and red at 80%.
 - **Hover** a chip for details. **Double-click** to open that session's window.
 - **Set how many chips** per group in Settings → Claude Code tasks.
 
