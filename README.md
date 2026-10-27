@@ -17,6 +17,10 @@ Your Claude Code usage and running sessions in the Windows taskbar. A fork of [C
 |---|---|
 | ![Popup for a session waiting on a permission prompt](docs/images/hover-permission.png) | ![Popup for a working session](docs/images/hover-working.png) |
 
+**Colour-blind friendly:** every status has its own icon, and low usage is blue so it never looks like a warning.
+
+![The widget simulated for red-blind, green-blind and blue-blind vision and in grayscale](docs/images/colour-blind.png)
+
 ## Install
 
 1. Download `claude-code-usage-monitor.exe` from [Releases](https://github.com/Abhisek571/Claude-Code-Taskbar-Expanded/releases) and keep it somewhere permanent.
