@@ -3,24 +3,29 @@
 ![Windows](https://img.shields.io/badge/platform-Windows-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A fork of [CodeZeno's Claude Code Usage Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor) that also shows your running Claude Code sessions in the Windows taskbar, next to your usage limits.
+Your Claude Code usage and running sessions in the Windows taskbar. A fork of [CodeZeno's Claude Code Usage Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor).
 
-See the [user guide](USER_GUIDE.md) for theme customisation and everyday settings,
-or the [changelog](CHANGELOG.md) for version history and notable changes.
+![Session chips and usage bars in the Windows taskbar](docs/images/taskbar.png)
 
-## What this fork adds
+- **Needs you first:** red lock for permission prompts, yellow ? for questions.
+- **Then working** (green sync) **and done** (grey check), each with a `+N` chip when full.
+- **Usage bars** turn green, amber at 50%, red at 80%.
+- **Hover** a chip for details. **Double-click** to open that session's window.
+- **Set how many chips** per group in Settings → Claude Code tasks.
 
-- **Session chips grouped by what they need from you.** Projects waiting on you come first (a red lock for a permission prompt, a yellow ? when Claude asked you a question), then working projects (green sync icon), then finished ones (grey check mark). Each group shows up to a set number of chips, then a `+N` chip for the rest.
-- **Full project names** sized to fit; worktrees under `.claude\worktrees` count as their repository.
-- **Hover a chip** to see each session's status, latest prompt, model, subagent count, last activity, and what it is waiting on.
-- **Double-click a chip** to bring that session's window to the front: its terminal, editor, or the Claude desktop app.
-- **Usage bars that change colour** with usage: green under 50%, amber from 50%, red from 80%.
-- **Chip limits in the dashboard** under Settings → Claude Code tasks (needs you, working, done; 0 to 6 each).
-- **Updates come from this repository**, so an update never swaps in the original app and drops the session chips.
+| Hover a chip that needs you | Hover a working chip |
+|---|---|
+| ![Popup for a session waiting on a permission prompt](docs/images/hover-permission.png) | ![Popup for a working session](docs/images/hover-working.png) |
 
-### Connect Claude Code
+## Install
 
-Session status comes from [Claude Code hooks](https://code.claude.com/docs/en/hooks). Each hook runs the monitor with `--hook` in the background, so it never slows Claude Code down. Add this to `%USERPROFILE%\.claude\settings.json`, with `command` set to where you keep the exe:
+1. Download `claude-code-usage-monitor.exe` from [Releases](https://github.com/Abhisek571/Claude-Code-Taskbar-Expanded/releases) and keep it somewhere permanent.
+2. Run it, then add the hooks below to `%USERPROFILE%\.claude\settings.json`, with `command` set to your exe path.
+
+<details>
+<summary>Claude Code hooks</summary>
+
+Each hook runs the exe with `--hook` in the background, so Claude Code never waits on it. Sessions are stored in `%APPDATA%\ClaudeCodeUsageMonitor\tasks` and stay on your PC.
 
 ```json
 {
@@ -40,7 +45,26 @@ Session status comes from [Claude Code hooks](https://code.claude.com/docs/en/ho
 }
 ```
 
-Sessions are recorded in `%APPDATA%\ClaudeCodeUsageMonitor\tasks` and stay on your PC. A session whose Claude Code process has exited is removed automatically.
+</details>
+
+Needs Windows 11 for the status icons. Updates come from this repo's releases. The `winget` package is the original app.
+
+---
+
+> **Everything below is CodeZeno's original README** for Claude Code Usage Monitor. It covers usage limits, providers, themes, and building from source, which all work the same here.
+
+
+## Claude Code Usage Monitor (original)
+
+![Windows](https://img.shields.io/badge/platform-Windows-blue)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+A lightweight, open-source Windows taskbar widget for monitoring Claude Code usage limits and reset times. It can also display usage for Codex, Google Antigravity, OpenCode Go, Cursor, Grok Build, and GitHub Copilot.
+
+See the [user guide](USER_GUIDE.md) for theme customisation and everyday settings,
+or the [changelog](CHANGELOG.md) for version history and notable changes.
+
+![Claude Code Usage Monitor running in the Windows taskbar](.github/animation.gif)
 
 ## Features
 
@@ -56,16 +80,20 @@ Sessions are recorded in `%APPDATA%\ClaudeCodeUsageMonitor\tasks` and stay on yo
 
 ## Requirements
 
-- Windows 11 (the session icons use the Segoe Fluent Icons font), or Windows 10 with usage only
+- Windows 10 or Windows 11
 - At least one supported provider installed and signed in
 
 Claude Code credentials can be detected from the CLI, Claude desktop app, or WSL. Other providers are optional and can be enabled independently from the dashboard.
 
 ## Installation
 
-Download `claude-code-usage-monitor.exe` from [Releases](https://github.com/Abhisek571/Claude-Code-Taskbar-Expanded/releases), keep it somewhere permanent (for example `%LOCALAPPDATA%\Programs\ClaudeCodeUsageMonitor`), run it, then [connect Claude Code](#connect-claude-code).
+Install the latest release with WinGet:
 
-The `winget` package installs the original app without session chips.
+```powershell
+winget install CodeZeno.ClaudeCodeUsageMonitor
+```
+
+Alternatively, download `claude-code-usage-monitor.exe` from [GitHub Releases](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases).
 
 See [updater verification](docs/updater.md) for the portable updater's integrity checks and trust boundary.
 
