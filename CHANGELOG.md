@@ -1,8 +1,28 @@
 # Changelog
 
-Notable changes to Claude Code Usage Monitor are documented here, newest first.
+Notable changes to Claude Code Taskbar Expanded, a fork of Claude Code Usage
+Monitor, are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
+
+## [2.23.0] - 2026-10-27
+
+First release of Claude Code Taskbar Expanded.
+
+### Added
+
+- Show running Claude Code sessions as project chips beside the usage bars, fed by Claude Code hooks through a new `--hook` mode. See the README for the hooks to add.
+- Group chips by what they need: needs you (permission prompts in red, questions in yellow), working, and done, each with its own limit (0 to 6) and a `+N` chip for the rest. Set the limits in the dashboard under Settings, Claude Code tasks.
+- Status icons on every chip (lock, question mark, sync, check mark, pause, warning) so status reads without colour.
+- Hover a chip for each session's status, latest prompt, model, subagent count, last activity, and what it is waiting on.
+- Double-click a chip to bring that session's terminal, editor, or Claude desktop app window forward.
+- Colour the Claude Code and Fable usage bars by level: green under 50%, amber from 50%, red from 80%.
+
+### Changed
+
+- Draw usage as thin rounded bars instead of segmented blocks.
+- Check for updates against this repository's releases.
+- Poll the taskbar layout every 4 seconds instead of 2, roughly halving idle CPU from that check.
 
 ## [2.22.4] - 2026-10-25
 
