@@ -7,6 +7,10 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
 ## [Unreleased]
 
+### Fixed
+
+- Restart the widget from the next Claude Code hook when it is not running, whether it was closed, stopped with Claude, or failed to start at sign-in. Attempts are at most once a minute, and the widget is started detached and outside Claude's process group where Windows allows it.
+
 ### Changed
 
 - Show low usage (under 50%) in blue instead of green, so it stays distinct from the amber warning colour for people with red-green colour blindness.

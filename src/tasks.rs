@@ -26,7 +26,8 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetProcessTimes, OpenMutexW, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    SYNCHRONIZATION_SYNCHRONIZE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetWindow, GetWindowTextLengthW, GetWindowTextW,
@@ -170,6 +171,64 @@ pub fn run_hook() {
         return;
     };
     let _ = record_hook_event(&tasks_directory(), &event, started_ms, claude_process);
+    ensure_monitor_running();
+}
+
+/// Name of the widget's single-instance mutex (see `window::run`).
+const MONITOR_MUTEX: &str = "Local\\ClaudeCodeUsageMonitor";
+/// Minimum gap between relaunch attempts, so a widget that cannot start is
+/// not respawned by every hook.
+const RELAUNCH_COOLDOWN: Duration = Duration::from_secs(60);
+
+/// Start the widget if it is not running. Hooks run whenever Claude Code is
+/// used, so a widget that was closed, crashed, or never started at sign-in
+/// comes back on the next Claude Code event.
+fn ensure_monitor_running() {
+    let name: Vec<u16> = MONITOR_MUTEX.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        if let Ok(handle) = OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, PCWSTR(name.as_ptr())) {
+            let _ = CloseHandle(handle);
+            return;
+        }
+    }
+    let marker = tasks_directory().join(".relaunch");
+    let recent = std::fs::metadata(&marker)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.elapsed().ok())
+        .is_some_and(|elapsed| elapsed < RELAUNCH_COOLDOWN);
+    if recent {
+        return;
+    }
+    let _ = std::fs::write(&marker, b"");
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let _ = spawn_detached(&exe);
+}
+
+/// Launch the widget with no console and no inherited pipes, outside the
+/// Claude Code process's job when the job allows it, so closing or updating
+/// Claude does not take the widget with it.
+fn spawn_detached(exe: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    let launch = |flags: u32| {
+        Command::new(exe)
+            .current_dir(exe.parent().unwrap_or(Path::new(".")))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(flags)
+            .spawn()
+            .map(drop)
+    };
+    let base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+    // Breaking away fails when the job forbids it; start inside it instead.
+    launch(base | CREATE_BREAKAWAY_FROM_JOB).or_else(|_| launch(base))
 }
 
 fn text<'a>(event: &'a Value, key: &str) -> &'a str {
