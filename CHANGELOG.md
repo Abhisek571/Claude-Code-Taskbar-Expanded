@@ -5,7 +5,7 @@ Monitor, are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
-## [Unreleased]
+## [2.23.1] - 2026-11-11
 
 ### Fixed
 
